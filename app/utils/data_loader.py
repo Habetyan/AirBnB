@@ -35,7 +35,13 @@ def load_data(return_raw=False):
             return df_raw, df_cleaned
         return df_cleaned
 
-    df = pd.read_csv("Airbnb_Texas.csv", low_memory=False)
+    try:
+        df = pd.read_parquet(PARQUET_PATH)
+        return df
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        # Return a simple placeholder DataFrame for debugging
+        return pd.DataFrame({'Error': ['Data loading failed']})
 
     if return_raw and not PARQUET_RAW_PATH.exists():
         df.to_parquet(PARQUET_RAW_PATH, compression="snappy", index=False)
