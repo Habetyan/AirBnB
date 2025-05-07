@@ -1,4 +1,4 @@
-# app/app.py
+# app/wsgi.py
 from dash import Dash
 import dash_bootstrap_components as dbc
 import dash
