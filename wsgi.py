@@ -1,9 +1,10 @@
-from app.app import app as flask_app  # Renamed to avoid namespace conflict
+# wsgi.py
+from app.app import app as flask_app  
 import app.pages.home
 import app.pages.geo_visualizations
 import app.pages.technical
 
-server = flask_app.server  # Use the renamed variable
+server = flask_app.server 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
