@@ -13,8 +13,9 @@ app = Dash(
 
 app.title = "Texas Airbnb Dashboard"
 
-# Import layout from index.py
+server = app.server         
+
+
 from app.index import create_layout
 
-# Set the app layout
 app.layout = create_layout()
