@@ -10,4 +10,4 @@ scikit-learn==1.6.1
 textblob==0.19.0
 Flask==3.0.3
 gunicorn==21.2.0
-pyarrow==15.0.0
+pyarrow
