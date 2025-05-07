@@ -1,9 +1,8 @@
-from app.app import app
+from app.app import server 
 import app.pages.home
 import app.pages.geo_visualizations
 import app.pages.technical
 
-server = app.server
 
 if __name__ == "__main__":
     import os
