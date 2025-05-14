@@ -17,6 +17,7 @@ def create_layout():
             children=[
                 dbc.NavItem(dbc.NavLink("Home", href="/")),
                 dbc.NavItem(dbc.NavLink("Geo data Analysis", href="/geo_visualizations")),
+                dbc.NavItem(dbc.NavLink("Technical Details", href="/technical")),
             ],
         ),
 

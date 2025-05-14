@@ -1,7 +1,8 @@
 import dash
-from dash import html, dcc
+from dash import html, dcc, Input, Output, callback
 import dash_bootstrap_components as dbc
 import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from app.utils.data_loader import load_data
@@ -95,6 +96,193 @@ def create_feature_corr_heatmap():
 
     return fig
 
+def create_feature_distribution(feature_name='average_rate_per_night'):
+    if feature_name not in df_cleaned.columns:
+        return go.Figure().update_layout(title=f"Feature '{feature_name}' not found in dataset")
+    
+    if df_cleaned[feature_name].dtype in [np.float64, np.int64]:
+        # For numeric features
+        fig = go.Figure()
+        
+        # Add histogram
+        fig.add_trace(go.Histogram(
+            x=df_cleaned[feature_name],
+            opacity=0.7,
+            name="Distribution",
+            marker_color='royalblue'
+        ))
+        
+        # Add KDE curve
+        hist_vals, bin_edges = np.histogram(
+            df_cleaned[feature_name].dropna(), 
+            bins=50, 
+            density=True
+        )
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        fig.add_trace(go.Scatter(
+            x=bin_centers,
+            y=hist_vals,
+            mode='lines',
+            name='Density',
+            line=dict(color='firebrick', width=2)
+        ))
+        
+        fig.update_layout(
+            title=f"Distribution of {feature_name}",
+            xaxis_title=feature_name,
+            yaxis_title="Frequency",
+            template='plotly_white',
+            bargap=0.1
+        )
+        
+    else:
+        # For categorical features
+        value_counts = df_cleaned[feature_name].value_counts().head(20)
+        
+        fig = px.bar(
+            x=value_counts.index,
+            y=value_counts.values,
+            labels={'x': feature_name, 'y': 'Count'},
+            title=f"Top Values for {feature_name}"
+        )
+        
+        fig.update_layout(
+            xaxis_tickangle=-45,
+            template='plotly_white'
+        )
+        
+    return fig
+
+def create_data_cleaning_viz():
+    # Before vs After cleaning stats
+    before_null = df_raw.isnull().sum().sort_values(ascending=False)
+    after_null = df_cleaned.isnull().sum().sort_values(ascending=False)
+    
+    before_percent = (before_null / len(df_raw) * 100).round(2)
+    after_percent = (after_null / len(df_cleaned) * 100).round(2)
+    
+    # Create a dataframe for the visualization
+    columns = [col for col in before_null.index if before_null[col] > 0]
+    
+    cleaning_data = []
+    for col in columns:
+        cleaning_data.append({
+            'column': col,
+            'stage': 'Before Cleaning',
+            'missing_percent': before_percent[col]
+        })
+        cleaning_data.append({
+            'column': col,
+            'stage': 'After Cleaning',
+            'missing_percent': after_percent[col] if col in after_percent.index else 0
+        })
+    
+    cleaning_df = pd.DataFrame(cleaning_data)
+    
+    fig = px.bar(
+        cleaning_df,
+        x='column',
+        y='missing_percent',
+        color='stage',
+        barmode='group',
+        title='Missing Values Before and After Cleaning (%)',
+        labels={'missing_percent': 'Missing Values (%)', 'column': 'Column', 'stage': 'Stage'}
+    )
+    
+    fig.update_layout(
+        xaxis_tickangle=-45,
+        template='plotly_white',
+    )
+    
+    return fig
+
+def create_feature_importance():
+    # Feature importance visualization for predicting price
+    features = [
+        'bedrooms_count', 'listing_age', 'description_length', 
+        'sentiment_score', 'has_luxury', 'has_family', 'has_pool',
+        'has_downtown', 'has_modern', 'has_quiet'
+    ]
+    
+    # Calculate correlation with price for each feature
+    feature_corrs = []
+    for feature in features:
+        if feature in df_cleaned.columns:
+            corr = df_cleaned[feature].corr(df_cleaned['average_rate_per_night'])
+            feature_corrs.append({
+                'feature': feature,
+                'correlation': abs(corr),
+                'direction': 'Positive' if corr >= 0 else 'Negative'
+            })
+    
+    corr_df = pd.DataFrame(feature_corrs).sort_values('correlation', ascending=False)
+    
+    fig = px.bar(
+        corr_df,
+        x='feature',
+        y='correlation',
+        color='direction',
+        title='Feature Correlation with Price (Absolute Value)',
+        labels={'correlation': 'Absolute Correlation', 'feature': 'Feature'}
+    )
+    
+    fig.update_layout(
+        xaxis_tickangle=-45,
+        template='plotly_white'
+    )
+    
+    return fig
+
+def create_sentiment_price_plot():
+    # Create a scatter plot of sentiment vs. price
+    if 'sentiment_score' in df_cleaned.columns:
+        fig = px.scatter(
+            df_cleaned,
+            x='sentiment_score',
+            y='average_rate_per_night',
+            color='bedrooms_count',
+            opacity=0.6,
+            title='Sentiment Score vs. Price',
+            labels={
+                'sentiment_score': 'Sentiment Score',
+                'average_rate_per_night': 'Average Rate per Night ($)',
+                'bedrooms_count': 'Bedrooms'
+            },
+            color_continuous_scale='Viridis'
+        )
+        
+        # Add regression line
+        fig.update_layout(template='plotly_white')
+        
+        # Add moving average trendline
+        x_range = np.linspace(
+            df_cleaned['sentiment_score'].min(),
+            df_cleaned['sentiment_score'].max(),
+            100
+        )
+        
+        # Simple moving average
+        sentiment_price_df = df_cleaned[['sentiment_score', 'average_rate_per_night']].dropna()
+        sentiment_price_df = sentiment_price_df.sort_values('sentiment_score')
+        
+        window_size = min(50, len(sentiment_price_df))
+        ma_series = sentiment_price_df['average_rate_per_night'].rolling(window=window_size).mean()
+        
+        fig.add_trace(go.Scatter(
+            x=sentiment_price_df['sentiment_score'],
+            y=ma_series,
+            mode='lines',
+            line=dict(color='red', width=3),
+            name='Trend'
+        ))
+        
+    else:
+        fig = go.Figure().update_layout(title="Sentiment score not found in dataset")
+    
+    return fig
+
+# Create layout
 layout = dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -167,6 +355,21 @@ layout = dbc.Container([
         ])
     ]),
 
+    # Data cleaning visualization
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Data Cleaning Effectiveness"),
+                dbc.CardBody([
+                    dcc.Graph(
+                        id="data-cleaning-viz",
+                        figure=create_data_cleaning_viz()
+                    )
+                ])
+            ])
+        ])
+    ], className="mb-4"),
+
     dbc.Row([
         dbc.Col([
             html.H4("Data Quality Analysis"),
@@ -204,19 +407,79 @@ layout = dbc.Container([
                 ])
             ]),
         ], md=6),
-    ]),
+    ], className="mb-4"),
 
-    html.Br(),
+    # Feature Distribution Explorer
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Feature Distribution Explorer"),
+                dbc.CardBody([
+                    html.Label("Select Feature:"),
+                    dcc.Dropdown(
+                        id="feature-selector",
+                        options=[
+                            {"label": "Average Rate per Night", "value": "average_rate_per_night"},
+                            {"label": "Bedrooms Count", "value": "bedrooms_count"},
+                            {"label": "Price per Bedroom", "value": "price_per_bedroom"},
+                            {"label": "Listing Age (days)", "value": "listing_age"},
+                            {"label": "Description Length", "value": "description_length"},
+                            {"label": "Sentiment Score", "value": "sentiment_score"},
+                            {"label": "City", "value": "city"}
+                        ],
+                        value="average_rate_per_night"
+                    ),
+                    dcc.Graph(
+                        id="feature-distribution-plot",
+                        figure=create_feature_distribution()
+                    )
+                ])
+            ])
+        ])
+    ], className="mb-4"),
+    
+    # Feature Importance and Sentiment Analysis
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Feature Importance for Price Prediction"),
+                dbc.CardBody([
+                    dcc.Graph(
+                        id="feature-importance-plot",
+                        figure=create_feature_importance()
+                    )
+                ])
+            ])
+        ], md=6),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Sentiment Analysis vs. Price"),
+                dbc.CardBody([
+                    dcc.Graph(
+                        id="sentiment-price-plot",
+                        figure=create_sentiment_price_plot()
+                    )
+                ])
+            ])
+        ], md=6)
+    ], className="mb-4"),
 
     dbc.Row([
         dbc.Col([
             html.H4("Further Analysis"),
             html.P([
-                "The insights from these correlation analyses inform the interactive visualizations available on the ",
-                html.A("Analysis", href="/analysis"),
-                " page. Use the navigation bar above to explore these interactive features."
+                "The insights from these correlation analyses inform the interactive visualizations available on the home page and geographic analysis sections. Use the navigation bar to explore the interactive features."
             ]),
-            dbc.Button("Go to Analysis", color="primary", href="/analysis", className="mt-2"),
+            dbc.Button("Go to Home", color="primary", href="/", className="me-2 mt-2"),
+            dbc.Button("Go to Geo Analysis", color="success", href="/geo_visualizations", className="mt-2"),
         ])
     ])
 ], fluid=True)
+
+# Callbacks
+@callback(
+    Output("feature-distribution-plot", "figure"),
+    Input("feature-selector", "value")
+)
+def update_feature_distribution(feature_name):
+    return create_feature_distribution(feature_name)

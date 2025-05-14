@@ -1,5 +1,5 @@
 import dash
-from dash import html, dcc, Input, Output
+from dash import html, dcc, Input, Output, State, callback
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
@@ -11,8 +11,9 @@ import matplotlib.pyplot as plt
 import folium
 import io
 from math import radians, cos, sin, asin, sqrt
+import base64
 
-# Register  dash page
+# Register dash page
 dash.register_page(
     __name__,
     path="/geo_visualizations",
@@ -22,7 +23,11 @@ dash.register_page(
 
 df_cleaned = load_data()
 
-#   Texas big  city centre coordinates
+price_min = int(df_cleaned['average_rate_per_night'].min())
+price_max = int(df_cleaned['average_rate_per_night'].max())
+bedrooms_max = int(df_cleaned['bedrooms_count'].max())
+
+# Texas big city centre coordinates
 CITY_CENTERS = {
     'Houston': (29.7604, -95.3698),
     'San Antonio': (29.4241, -98.4936),
@@ -55,10 +60,27 @@ def haversine(lon1, lat1, lon2, lat2):
     return c * r
 
 
-# Create geo-visualization
-def create_geo_visualization():
-    df_geo = df_cleaned.dropna(subset=["latitude", "longitude"])
+# Function to filter dataframe based on inputs
+def filter_dataframe(df, city_filter=None, price_range=None, bedrooms=None):
+    filtered_df = df.copy()
+    
+    if city_filter and city_filter != "All Cities":
+        filtered_df = filtered_df[filtered_df['city'] == city_filter]
+    
+    if price_range:
+        min_price, max_price = price_range
+        filtered_df = filtered_df[(filtered_df['average_rate_per_night'] >= min_price) & 
+                                (filtered_df['average_rate_per_night'] <= max_price)]
+    
+    if bedrooms:
+        filtered_df = filtered_df[filtered_df['bedrooms_count'].isin(bedrooms)]
+    
+    return filtered_df
 
+
+# Create geo-visualization
+def create_geo_visualization(filtered_df=None):
+    df_geo = filtered_df.dropna(subset=["latitude", "longitude"]) if filtered_df is not None else df_cleaned.dropna(subset=["latitude", "longitude"])
 
     fig = make_subplots(
         rows=1, cols=2,
@@ -88,7 +110,15 @@ def create_geo_visualization():
             x=df_geo['longitude'],
             y=df_geo['latitude'],
             mode='markers',
-            marker=dict(size=2, color='blue', opacity=0.2),
+            marker=dict(
+                size=5, 
+                color=df_geo['average_rate_per_night'],
+                colorscale='Viridis',
+                opacity=0.6,
+                colorbar=dict(title="Price ($)")
+            ),
+            text=df_geo['title'],
+            hoverinfo='text+x+y',
             showlegend=False
         ),
         row=1, col=1
@@ -122,9 +152,13 @@ def create_geo_visualization():
 
 
 # Distance/ price visualization
-def create_distance_price_visualization(selected_city='Houston'):
+def create_distance_price_visualization(selected_city='Houston', filtered_df=None):
     center_lat, center_lon = CITY_CENTERS.get(selected_city, CITY_CENTERS['Houston'])
-    df_with_distance = df_cleaned.dropna(subset=['latitude', 'longitude', 'average_rate_per_night']).copy()
+    
+    if filtered_df is not None:
+        df_with_distance = filtered_df.dropna(subset=['latitude', 'longitude', 'average_rate_per_night']).copy()
+    else:
+        df_with_distance = df_cleaned.dropna(subset=['latitude', 'longitude', 'average_rate_per_night']).copy()
 
     # Distance from city center for each listing
     df_with_distance['distance_km'] = df_with_distance.apply(
@@ -132,8 +166,7 @@ def create_distance_price_visualization(selected_city='Houston'):
         axis=1
     )
 
-
-    #  95th percentile cutoff
+    # 95th percentile cutoff
     distance_cutoff = df_with_distance['distance_km'].quantile(0.95)
     df_filtered = df_with_distance[df_with_distance['distance_km'] <= distance_cutoff]
 
@@ -163,20 +196,19 @@ def create_distance_price_visualization(selected_city='Houston'):
         yaxis_title='Average Rate per Night ($)'
     )
 
-    #  trendline
+    # trendline
     df_trend = df_filtered.copy()
-    x = df_trend['distance_km']
-    y = df_trend['average_rate_per_night']
-
+    
     fig.update_traces(
         mode='markers',
         marker=dict(line=dict(width=0.5, color='white'))
     )
 
+    # Add moving average trend line
     fig.add_trace(
         go.Scatter(
             x=df_trend['distance_km'],
-            y=df_trend['average_rate_per_night'].rolling(window=50).mean(),
+            y=df_trend['average_rate_per_night'].rolling(window=min(50, len(df_trend))).mean(),
             mode='lines',
             name='Price Trend',
             line=dict(color='red', width=2)
@@ -185,41 +217,124 @@ def create_distance_price_visualization(selected_city='Houston'):
 
     return fig
 
-def create_folium_map_html():
-    city_avg_price = df_cleaned.groupby("city")["average_rate_per_night"].mean().reset_index()
-
+def create_folium_map_html(filtered_df=None):
+    df_for_map = filtered_df if filtered_df is not None else df_cleaned
+    
+    city_avg_price = df_for_map.groupby("city")["average_rate_per_night"].mean().reset_index()
+    city_count = df_for_map.groupby("city").size().reset_index(name="count")
+    city_data = pd.merge(city_avg_price, city_count, on="city")
 
     m = folium.Map(
-        location=[df_cleaned["latitude"].mean(), df_cleaned["longitude"].mean()],
+        location=[df_for_map["latitude"].mean(), df_for_map["longitude"].mean()],
         zoom_start=6,
         tiles="OpenStreetMap"
     )
 
     # Circle markers for each city
-    for _, row in city_avg_price.iterrows():
-        city_data = df_cleaned[df_cleaned["city"] == row["city"]]
-        lat_mean = city_data["latitude"].mean()
-        lon_mean = city_data["longitude"].mean()
+    for _, row in city_data.iterrows():
+        city_listings = df_for_map[df_for_map["city"] == row["city"]]
+        lat_mean = city_listings["latitude"].mean()
+        lon_mean = city_listings["longitude"].mean()
 
         # Sanity check for correct coordinates
         if not np.isnan(lat_mean) and not np.isnan(lon_mean):
             folium.CircleMarker(
                 location=[lat_mean, lon_mean],
-                radius=np.sqrt(row["average_rate_per_night"]) * 0.3,
+                radius=min(20, np.sqrt(row["count"])),
                 color="green",
                 fill=True,
                 fill_color="green",
-                fill_opacity=0.3,
-                popup=f"{row['city']}: ${row['average_rate_per_night']:.2f}",
+                fill_opacity=0.6,
+                popup=f"{row['city']}: ${row['average_rate_per_night']:.2f} (Listings: {row['count']})",
             ).add_to(m)
 
+    # Create a choropleth layer for average prices by city
+    for _, row in city_data.iterrows():
+        city_listings = df_for_map[df_for_map["city"] == row["city"]]
+        if len(city_listings) > 10:  # Only for cities with enough listings
+            lat_mean = city_listings["latitude"].mean()
+            lon_mean = city_listings["longitude"].mean()
+            
+            if not np.isnan(lat_mean) and not np.isnan(lon_mean):
+                folium.Circle(
+                    location=[lat_mean, lon_mean],
+                    radius=row["average_rate_per_night"] * 15,  # Scale by price
+                    color="blue",
+                    fill=True,
+                    fill_color="blue",
+                    fill_opacity=0.2,
+                    popup=f"Avg Price: ${row['average_rate_per_night']:.2f}",
+                ).add_to(m)
 
     map_html = m._repr_html_()
-
     return map_html
 
 
-#  layout for geo-visualization
+# Create 3D map visualization
+def create_3d_price_map(filtered_df=None):
+    df_geo = filtered_df.dropna(subset=["latitude", "longitude", "average_rate_per_night"]) if filtered_df is not None else df_cleaned.dropna(subset=["latitude", "longitude", "average_rate_per_night"])
+    
+    fig = px.scatter_3d(
+        df_geo,
+        x='longitude', 
+        y='latitude', 
+        z='average_rate_per_night',
+        color='bedrooms_count',
+        color_continuous_scale='Viridis',
+        size='average_rate_per_night',
+        size_max=10,
+        opacity=0.7,
+        hover_name='city',
+        hover_data=['title', 'bedrooms_count', 'average_rate_per_night'],
+        labels={
+            'longitude': 'Longitude',
+            'latitude': 'Latitude',
+            'average_rate_per_night': 'Price ($)',
+            'bedrooms_count': 'Bedrooms'
+        },
+        title="3D Price Map of Airbnb Listings"
+    )
+    
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='Longitude',
+            yaxis_title='Latitude',
+            zaxis_title='Price ($)',
+            aspectratio=dict(x=1, y=1, z=0.5)
+        ),
+        template='plotly_white'
+    )
+    
+    return fig
+
+
+# Create price heatmap by location
+def create_price_heatmap(filtered_df=None):
+    df_for_heatmap = filtered_df.dropna(subset=["latitude", "longitude", "average_rate_per_night"]) if filtered_df is not None else df_cleaned.dropna(subset=["latitude", "longitude", "average_rate_per_night"])
+    
+    fig = px.density_mapbox(
+        df_for_heatmap, 
+        lat='latitude', 
+        lon='longitude', 
+        z='average_rate_per_night', 
+        radius=10,
+        center=dict(lat=30.9, lon=-97.8), 
+        zoom=5,
+        hover_name='city',
+        hover_data=['title', 'bedrooms_count', 'average_rate_per_night'],
+        mapbox_style="open-street-map",
+        title="Price Heatmap of Airbnb Listings"
+    )
+    
+    fig.update_layout(
+        height=500, 
+        margin=dict(l=10, r=10, t=50, b=10)
+    )
+    
+    return fig
+
+
+# layout for geo-visualization
 layout = dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -228,8 +343,55 @@ layout = dbc.Container([
             html.Hr(),
         ])
     ]),
+    
+    # Filters section
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Filters"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("City:"),
+                            dcc.Dropdown(
+                                id="geo-city-filter",
+                                options=[{"label": "All Cities", "value": "All Cities"}] + 
+                                        [{"label": city, "value": city} for city in sorted(df_cleaned['city'].unique())],
+                                value="All Cities",
+                                clearable=False
+                            ),
+                        ], width=3),
+                        dbc.Col([
+                            html.Label("Price Range ($):"),
+                            dcc.RangeSlider(
+                                id="geo-price-range-slider",
+                                min=price_min,
+                                max=price_max,
+                                step=10,
+                                value=[price_min, price_max],
+                                marks={i: f"${i}" for i in range(price_min, price_max+1, 200)},
+                                tooltip={"placement": "bottom", "always_visible": True}
+                            ),
+                        ], width=3),
+                        dbc.Col([
+                            html.Label("Bedrooms:"),
+                            dcc.Dropdown(
+                                id="geo-bedrooms-filter",
+                                options=[{"label": str(i), "value": i} for i in range(1, bedrooms_max+1)],
+                                value=[1, 2, 3],
+                                multi=True
+                            ),
+                        ], width=3),
+                        dbc.Col([
+                            dbc.Button("Apply Filters", id="geo-apply-filter", color="primary", className="mt-4"),
+                        ], width=3),
+                    ]),
+                ])
+            ]),
+        ])
+    ], className="mb-4"),
 
-    #  Density visualizations
+    # Density visualizations
     dbc.Row([
         dbc.Col([
             dbc.Card([
@@ -242,18 +404,14 @@ layout = dbc.Container([
                 ])
             ])
         ])
-    ]),
+    ], className="mb-4"),
 
-    html.Br(),
-
-    #  Distance/price plot
+    # Distance/price plot
     dbc.Row([
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Distance from City Center vs. Price"),
+                dbc.CardHeader("Price vs. Distance from City Center"),
                 dbc.CardBody([
-                    html.P(
-                        "This visualization shows how property prices vary with distance from major city centers in Texas."),
                     dbc.Row([
                         dbc.Col([
                             html.Label("Select City Center:"),
@@ -261,85 +419,95 @@ layout = dbc.Container([
                                 id="city-center-dropdown",
                                 options=[{"label": city, "value": city} for city in CITY_CENTERS.keys()],
                                 value="Houston",
-                                className="mb-3"
-                            ),
-                        ], width=4)
-                    ]),
+                                clearable=False
+                            )
+                        ], width=6)
+                    ], className="mb-3"),
                     dcc.Graph(
                         id="distance-price-visualization",
-                        figure=create_distance_price_visualization()
+                        figure=create_distance_price_visualization("Houston")
                     )
                 ])
             ])
         ])
-    ]),
-
-    html.Br(),
-
-    # Folium map
+    ], className="mb-4"),
+    
+    # 3D Price Map
     dbc.Row([
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Average Price by City"),
+                dbc.CardHeader("3D Price Visualization"),
                 dbc.CardBody([
-                    html.P(
-                        "This map shows the average price per night for each city in Texas. The size of each circle represents the price."),
-                    html.Div([
-                        html.Iframe(
-                            id="folium-map",
-                            srcDoc=create_folium_map_html(),
-                            style={
-                                "width": "100%",
-                                "height": "600px",
-                                "border": "none"
-                            }
-                        )
-                    ])
+                    dcc.Graph(
+                        id="3d-price-map",
+                        figure=create_3d_price_map()
+                    )
                 ])
             ])
         ])
-    ]),
-
-    html.Br(),
-
+    ], className="mb-4"),
+    
+    # Interactive Map with price density
     dbc.Row([
         dbc.Col([
-            html.H4("Understanding the Visualizations"),
-            html.P([
-                "This page presents geographic visualizations of Texas Airbnb listings:",
-                html.Ul([
-                    html.Li([
-                        html.Strong("KDE-like Density:"),
-                        " Shows where listings are concentrated using contour lines and scatter points"
-                    ]),
-                    html.Li([
-                        html.Strong("Density Heatmap:"),
-                        " Displays listing density as a 2D histogram with color intensity"
-                    ]),
-                    html.Li([
-                        html.Strong("Distance vs. Price Analysis:"),
-                        " Reveals how property prices vary with distance from major city centers"
-                    ]),
-                    html.Li([
-                        html.Strong("Average Price Map:"),
-                        " Shows average price per night for each city, with circle size representing price"
-                    ])
+            dbc.Card([
+                dbc.CardHeader("Price Heatmap"),
+                dbc.CardBody([
+                    dcc.Graph(
+                        id="price-heatmap",
+                        figure=create_price_heatmap()
+                    )
                 ])
-            ]),
-            html.P([
-                "For more information about data processing and methodology, visit the ",
-                html.A("Technical Details", href="/technical"), " page."
-            ]),
-            html.Br(),
+            ])
+        ])
+    ], className="mb-4"),
+
+    # Folium Map
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Interactive City Price Map"),
+                dbc.CardBody([
+                    html.Iframe(
+                        id="folium-map",
+                        srcDoc=create_folium_map_html(),
+                        width="100%",
+                        height="500px",
+                        style={"border": "none"}
+                    )
+                ])
+            ])
         ])
     ])
 ], fluid=True)
 
 
-# Callback to update Distance vs. Price visualization based on selected city
-@dash.callback(
-    Output("distance-price-visualization", "figure"),
-    Input("city-center-dropdown", "value")
+# Callbacks
+@callback(
+    [Output("geo-visualization", "figure"),
+     Output("distance-price-visualization", "figure"),
+     Output("folium-map", "srcDoc"),
+     Output("3d-price-map", "figure"),
+     Output("price-heatmap", "figure")],
+    [Input("geo-apply-filter", "n_clicks"),
+     Input("city-center-dropdown", "value")],
+    [State("geo-city-filter", "value"),
+     State("geo-price-range-slider", "value"),
+     State("geo-bedrooms-filter", "value")],
+    prevent_initial_call=True
 )
-def update_distance_price(selected_city):
-    return create_distance_price_visualization(selected_city)
+def update_geo_visualizations(n_clicks, selected_city, city_filter, price_range, bedrooms_filter):
+    filtered_df = filter_dataframe(
+        df_cleaned,
+        city_filter=city_filter,
+        price_range=price_range,
+        bedrooms=bedrooms_filter
+    )
+    
+    geo_viz = create_geo_visualization(filtered_df)
+    distance_price_viz = create_distance_price_visualization(selected_city, filtered_df)
+    folium_map_html = create_folium_map_html(filtered_df)
+    price_map_3d = create_3d_price_map(filtered_df)
+    price_heatmap = create_price_heatmap(filtered_df)
+    
+    return geo_viz, distance_price_viz, folium_map_html, price_map_3d, price_heatmap

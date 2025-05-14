@@ -1,5 +1,5 @@
 import dash
-from dash import html, dcc, dash_table, Input, Output, State
+from dash import html, dcc, dash_table, Input, Output, State, callback
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
@@ -10,7 +10,6 @@ from app.utils.data_loader import load_data
 from wordcloud import WordCloud
 import io
 import base64
-from dash.dependencies import Input, Output, State
 
 dash.register_page(__name__, path="/", name="Home")
 
@@ -20,21 +19,29 @@ df['year'] = df['date_of_listing'].dt.year
 cities = sorted(df['city'].unique())
 cities.insert(0, "All Cities")  # Add "All Cities" option at the beginning
 
+price_min = int(df['average_rate_per_night'].min())
+price_max = int(df['average_rate_per_night'].max())
+bedrooms_max = int(df['bedrooms_count'].max())
 
-def get_stats(city_filter="All Cities"):
-    if city_filter == "All Cities":
-        filtered_df = df
-    else:
-        filtered_df = df[df['city'] == city_filter]
+def get_stats(city_filter="All Cities", price_range=None):
+    filtered_df = df.copy()
+    
+    if city_filter != "All Cities":
+        filtered_df = filtered_df[filtered_df['city'] == city_filter]
+    
+    if price_range:
+        min_price, max_price = price_range
+        filtered_df = filtered_df[(filtered_df['average_rate_per_night'] >= min_price) & 
+                               (filtered_df['average_rate_per_night'] <= max_price)]
 
     n_listings = filtered_df.shape[0]
     n_cities = 1 if city_filter != "All Cities" else filtered_df['city'].nunique()
     avg_price = filtered_df['average_rate_per_night'].mean()
     avg_beds = filtered_df['bedrooms_count'].mean()
 
-    return n_listings, n_cities, avg_price, avg_beds
+    return n_listings, n_cities, avg_price, avg_beds, filtered_df
 
-n_listings, n_cities, avg_price, avg_beds = get_stats()
+n_listings, n_cities, avg_price, avg_beds, _ = get_stats()
 keywords = ['has_luxury', 'has_family', 'has_pool', 'has_downtown', 'has_modern', 'has_quiet']
 kw_df = (
     df[keywords]
@@ -47,8 +54,9 @@ kw_df['pct'] = kw_df['count'] / n_listings * 100
 
 
 # Yearly rate trend
-def create_yearly_rate_trend():
-    avg_rate_per_year = df.groupby('year')['average_rate_per_night'].mean().reset_index()
+def create_yearly_rate_trend(filtered_df=None):
+    df_to_use = filtered_df if filtered_df is not None else df
+    avg_rate_per_year = df_to_use.groupby('year')['average_rate_per_night'].mean().reset_index()
     years = avg_rate_per_year['year'].tolist()
 
     # Generate colors
@@ -96,8 +104,9 @@ def create_yearly_rate_trend():
 
 
 #  moving average trend
-def create_moving_average_trend():
-    df_sorted = df.sort_values(by='date_of_listing')
+def create_moving_average_trend(filtered_df=None):
+    df_to_use = filtered_df if filtered_df is not None else df
+    df_sorted = df_to_use.sort_values(by='date_of_listing')
 
     # Moving average
     window_size = 7
@@ -134,11 +143,12 @@ def create_moving_average_trend():
 
 
 # Listings count
-def create_listings_count():
-    city_listing_count = df["city"].value_counts().reset_index()
+def create_listings_count(filtered_df=None):
+    df_to_use = filtered_df if filtered_df is not None else df
+    city_listing_count = df_to_use["city"].value_counts().reset_index()
     city_listing_count.columns = ["city", "num_listings"]
 
-    host_listings_count = df["title"].value_counts().reset_index()
+    host_listings_count = df_to_use["title"].value_counts().reset_index()
     host_listings_count.columns = ["host", "num_listings"]
 
     fig = make_subplots(
@@ -178,8 +188,12 @@ def create_listings_count():
 
 
 # Price by bedrooms box plot
-def create_price_by_bedrooms():
-    filtered_df = df.dropna(subset=["bedrooms_count", "average_rate_per_night"])
+def create_price_by_bedrooms(filtered_df=None, selected_bedrooms=None):
+    df_to_use = filtered_df if filtered_df is not None else df
+    filtered_df = df_to_use.dropna(subset=["bedrooms_count", "average_rate_per_night"])
+    
+    if selected_bedrooms:
+        filtered_df = filtered_df[filtered_df['bedrooms_count'].isin(selected_bedrooms)]
 
     fig = px.box(
         filtered_df,
@@ -207,8 +221,9 @@ def create_price_by_bedrooms():
 
 
 # City price comparison
-def create_city_price_comparison():
-    city_avg_rate = df.groupby("city")["average_rate_per_night"].mean().reset_index()
+def create_city_price_comparison(filtered_df=None):
+    df_to_use = filtered_df if filtered_df is not None else df
+    city_avg_rate = df_to_use.groupby("city")["average_rate_per_night"].mean().reset_index()
     city_avg_rate = city_avg_rate.sort_values(by="average_rate_per_night", ascending=False)
 
     top_10_cities = city_avg_rate.head(10)
@@ -251,348 +266,371 @@ def create_city_price_comparison():
     return fig
 
 
-# Create word cloud function
-def create_word_cloud(df, city=None):
-    """Create a word cloud from listing descriptions with optional city filtering"""
-    filtered_df = df.copy()
+# Word cloud creation
+def create_word_cloud(filtered_df=None, city=None):
+    df_for_wc = filtered_df if filtered_df is not None else df
+    
     if city and city != "All Cities":
-        filtered_df = filtered_df[filtered_df['city'] == city]
-
-    # Combine all descriptions
-    all_descriptions = ' '.join(filtered_df['description'].fillna('').astype(str).tolist())
-
-    # Common words to exclude
-    stopwords = set(['the', 'and', 'to', 'of', 'in', 'a', 'is', 'with', 'for', 'on', 'at', 'from',
-                     'this', 'that', 'will', 'are', 'be', 'have', 'has', 'you', 'we', 'our',
-                     'your', 'their', 'us', 'can', 'just', 'or', 'by', 'not', 'an', 'it',
-                     'its', 'but', 'also', 'as', 'one', 'two', 'there', 'here', 'all'])
-
-    # Generate word cloud - reduced size by 30%
+        df_for_wc = df_for_wc[df_for_wc['city'] == city]
+    
+    all_text = ' '.join(df_for_wc['description'].dropna().astype(str))
+    
     wordcloud = WordCloud(
-        width=600,
-        height=280,
+        width=800, 
+        height=400,
         background_color='white',
-        max_words=80,
-        contour_width=2,
-        contour_color='steelblue',
-        stopwords=stopwords,
-        collocations=False,
-        min_font_size=8,  # Set minimum font size
-        max_font_size=150  # Control maximum font size
-    ).generate(all_descriptions)
-
-    # Convert word cloud to image
-    img = io.BytesIO()
-    plt.figure(figsize=(7.5, 3.5))  # Reduced from (10, 5)
+        max_words=200,
+        contour_width=3,
+        contour_color='steelblue'
+    ).generate(all_text)
+    
+    plt.figure(figsize=(10, 5))
     plt.imshow(wordcloud, interpolation='bilinear')
-    plt.axis("off")
-    plt.tight_layout(pad=0)
-    plt.savefig(img, format='png', bbox_inches='tight', dpi=100)
+    plt.axis('off')
+    
+    # Convert the plot to an image
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png')
     plt.close()
-    img.seek(0)
-
-    encoded_image = base64.b64encode(img.getvalue()).decode('utf-8')
-
-    return encoded_image
+    img_buf.seek(0)
+    
+    return 'data:image/png;base64,{}'.format(base64.b64encode(img_buf.read()).decode())
 
 
-layout = dbc.Container(fluid=True, children=[
+# Layout
+layout = dbc.Container([
     dbc.Row([
         dbc.Col([
-            html.H1("Texas Airbnb Dashboard", className="display-4"),
-            html.P(
-                "Explore listings, pricing trends, and market analysis for Airbnb properties across Texas",
-                className="lead"
-            ),
+            html.H1("Texas Airbnb Analysis Dashboard"),
+            html.P("A comprehensive analysis of Airbnb listings in Texas, USA."),
             html.Hr(),
         ])
-    ], className="mb-4"),
-
-    # City search
+    ]),
+    
+    # Filters section
     dbc.Row([
         dbc.Col([
-            dbc.InputGroup([
-                dbc.InputGroupText("Filter by City:"),
-                dbc.Select(
-                    id="city-filter",
-                    options=[{"label": city, "value": city} for city in cities],
-                    value="All Cities"
-                ),
-                dbc.Button("Apply Filter", id="apply-filter", color="primary", className="ms-2")
-            ])
-        ], width={"size": 6, "offset": 0})
-    ], className="mb-4"),
-    dbc.Row(
-        [
-            dbc.Col(dbc.Card([
-                dbc.CardHeader("Total Listings"),
-                dbc.CardBody(html.H4(id="total-listings", children=f"{n_listings:,}", className="card-title"))
-            ], className="shadow-sm"), xs=6, sm=6, md=3, lg=3),
-
-            dbc.Col(dbc.Card([
-                dbc.CardHeader("Cities"),
-                dbc.CardBody(html.H4(id="total-cities", children=f"{n_cities}", className="card-title"))
-            ], className="shadow-sm"), xs=6, sm=6, md=3, lg=3),
-
-            dbc.Col(dbc.Card([
-                dbc.CardHeader("Avg. Price"),
-                dbc.CardBody(html.H4(id="avg-price", children=f"${avg_price:.2f}", className="card-title"))
-            ], className="shadow-sm"), xs=6, sm=6, md=3, lg=3),
-
-            dbc.Col(dbc.Card([
-                dbc.CardHeader("Avg. Bedrooms"),
-                dbc.CardBody(html.H4(id="avg-bedrooms", children=f"{avg_beds:.1f}", className="card-title"))
-            ], className="shadow-sm"), xs=6, sm=6, md=3, lg=3),
-        ],
-        className="mb-4",
-    ),
-
-    #  Tab navigation
-    dbc.Row([
-        dbc.Col([
-            html.H2("Airbnb Market Analysis", className="mt-2 mb-3"),
-            dbc.Tabs([
-                # Tab 1: Price Trends
-                dbc.Tab(label="Price Trends", children=[
+            dbc.Card([
+                dbc.CardHeader("Filters"),
+                dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader("Annual Price Trends"),
-                                dbc.CardBody([
-                                    dcc.Graph(
-                                        id="yearly-rate-trend",
-                                        figure=create_yearly_rate_trend()
-                                    )
-                                ])
-                            ], className="shadow-sm mt-3 mb-3")
-                        ]),
-                    ]),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader("Daily Price Trends with 7-Day Moving Average"),
-                                dbc.CardBody([
-                                    dcc.Graph(
-                                        id="moving-average-trend",
-                                        figure=create_moving_average_trend()
-                                    )
-                                ])
-                            ], className="shadow-sm mb-3")
-                        ]),
-                    ]),
-                ]),
-
-                # Tab 2: Market Structure
-                dbc.Tab(label="Market Structure", children=[
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader("Top Cities and Hosts by Listing Count"),
-                                dbc.CardBody([
-                                    dcc.Graph(
-                                        id="listings-count",
-                                        figure=create_listings_count()
-                                    )
-                                ])
-                            ], className="shadow-sm mt-3 mb-3")
-                        ]),
-                    ]),
-                ]),
-
-                # Tab 3: Price Analysis
-                dbc.Tab(label="Price Analysis", children=[
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader("Price Distribution by Number of Bedrooms"),
-                                dbc.CardBody([
-                                    dcc.Graph(
-                                        id="price-by-bedrooms",
-                                        figure=create_price_by_bedrooms()
-                                    )
-                                ])
-                            ], className="shadow-sm mt-3 mb-3")
-                        ]),
-                    ]),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader("City Price Comparison"),
-                                dbc.CardBody([
-                                    dcc.Graph(
-                                        id="city-price-comparison",
-                                        figure=create_city_price_comparison()
-                                    )
-                                ])
-                            ], className="shadow-sm mb-3")
-                        ]),
-                    ]),
-                ]),
-
-                # Tab 4: Amenities
-                dbc.Tab(label="Amenities", children=[
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader("Listing Amenities Analysis"),
-                                dbc.CardBody([
-                                    dcc.Graph(
-                                        id="kw-bar",
-                                        figure=px.bar(
-                                            kw_df,
-                                            x='keyword',
-                                            y='pct',
-                                            text=kw_df['pct'].map("{:.1f}%".format),
-                                            title="% of Listings Containing Keyword",
-                                            labels={'pct': '% of listings', 'keyword': 'Keyword'},
-                                            color='pct',
-                                            color_continuous_scale='Viridis',
-                                            height=400
-                                        ).update_layout(xaxis_tickangle=-45)
-                                    )
-                                ])
-                            ], className="shadow-sm mt-3 mb-3")
-                        ]),
-                    ]),
-                ]),
-
-                # Tab 5: Sample Listings
-                dbc.Tab(label="Sample Listings", children=[
-                    dbc.Row([
-                        dbc.Col([
-                            html.H5("Sample Listings", className="mt-3"),
-                            html.Label("Rows to show:"),
-                            dcc.Slider(
-                                id='n-sample-slider',
-                                min=5, max=20, step=5, value=10,
-                                marks={i: f"{i}" for i in [5, 10, 15, 20]}
+                            html.Label("City:"),
+                            dcc.Dropdown(
+                                id="city-filter",
+                                options=[{"label": city, "value": city} for city in cities],
+                                value="All Cities",
+                                clearable=False
                             ),
-                            dash_table.DataTable(
-                                id='sample-table',
-                                columns=[
-                                    {"name": "City", "id": "city"},
-                                    {"name": "Title", "id": "title"},
-                                    {"name": "Price", "id": "average_rate_per_night", "type": "numeric",
-                                     "format": {'specifier': "$,.2f"}},
-                                    {"name": "Beds", "id": "bedrooms_count"},
-                                    {"name": "Age (days)", "id": "listing_age"},
-                                ],
-                                page_size=20,
-                                style_table={"overflowX": "auto"},
-                                style_cell={"textAlign": "left", "padding": "5px"},
-                                style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"},
-                            )
-                        ], width=12),
-                    ], className="mt-3 mb-3"),
-                ]),
-
-                # Tab 6: Word Cloud
-                dbc.Tab(label="Word Cloud", children=[
-                    dbc.Row([
+                        ], width=4),
                         dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader([
-                                    html.H5("Listing Description Word Cloud", className="mb-0"),
-                                ]),
-                                dbc.CardBody([
-                                    dbc.Row([
-                                        dbc.Col([
-                                            html.Label("Select City:"),
-                                            dcc.Dropdown(
-                                                id='word-cloud-city-filter',
-                                                options=[{"label": city, "value": city} for city in cities],
-                                                value="All Cities",
-                                                className="mb-2"
-                                            ),
-                                            dbc.Button("Generate", id="generate-word-cloud", color="primary", size="sm",
-                                                       className="mb-2"),
-                                            html.P(
-                                                "This visualization shows frequently used words in property descriptions. The size indicates how often each word appears.",
-                                                className="text-muted small mt-2"),
-                                        ], width=3),
-
-                                        dbc.Col([
-                                            html.Div([
-                                                html.Img(
-                                                    id="word-cloud-image",
-                                                    src=f"data:image/png;base64,{create_word_cloud(df)}",
-                                                    style={'width': '100%', 'max-height': '300px',
-                                                           'object-fit': 'contain'}
-                                                ),
-                                            ], style={'text-align': 'center'})
-                                        ], width=9),
-                                    ]),
-                                ], className="p-3")
-                            ], className="shadow-sm mt-3 mb-3")
-                        ])
-                    ])
-                ]),
+                            html.Label("Price Range ($):"),
+                            dcc.RangeSlider(
+                                id="price-range-slider",
+                                min=price_min,
+                                max=price_max,
+                                step=10,
+                                value=[price_min, price_max],
+                                marks={i: f"${i}" for i in range(price_min, price_max+1, 200)},
+                                tooltip={"placement": "bottom", "always_visible": True}
+                            ),
+                        ], width=4),
+                        dbc.Col([
+                            html.Label("Bedrooms:"),
+                            dcc.Dropdown(
+                                id="bedrooms-filter",
+                                options=[{"label": str(i), "value": i} for i in range(1, bedrooms_max+1)],
+                                value=[1, 2, 3],
+                                multi=True
+                            ),
+                        ], width=3),
+                        dbc.Col([
+                            dbc.Button("Apply Filters", id="apply-filter", color="primary", className="mt-4"),
+                        ], width=1),
+                    ]),
+                ])
             ]),
-        ], width=12),
-    ]),
-
-    # Footer with navigation
+        ])
+    ], className="mb-4"),
+    
+    # Stats cards
     dbc.Row([
         dbc.Col([
-            html.Hr(),
-            html.P([
-                "For geographic analysis and mapping of listings, visit the ",
-                html.A("Geo Data Analysis", href="/geo_visualizations", className="text-decoration-none"),
-                " page."
+            dbc.Card([
+                dbc.CardHeader("Total Listings"),
+                dbc.CardBody([
+                    html.H3(id="total-listings", children=f"{n_listings:,}"),
+                ])
             ]),
-            html.P([
-                "For technical details about data preprocessing and methodology, visit the ",
-                html.A("Technical Details", href="/technical", className="text-decoration-none"),
-                " page."
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Cities"),
+                dbc.CardBody([
+                    html.H3(id="total-cities", children=f"{n_cities}"),
+                ])
             ]),
-        ], className="mt-4 mb-4")
-    ]),
-], )
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Average Price"),
+                dbc.CardBody([
+                    html.H3(id="avg-price", children=f"${avg_price:.2f}"),
+                ])
+            ]),
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Average Bedrooms"),
+                dbc.CardBody([
+                    html.H3(id="avg-bedrooms", children=f"{avg_beds:.1f}"),
+                ])
+            ]),
+        ], width=3),
+    ], className="mb-4"),
 
-@dash.callback(
+    # Trend graphs
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Yearly Price Trends"),
+                dbc.CardBody([
+                    dcc.Graph(id="yearly-rate-trend", figure=create_yearly_rate_trend())
+                ])
+            ]),
+        ], width=6),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Moving Average Trend"),
+                dbc.CardBody([
+                    dcc.Graph(id="moving-average-trend", figure=create_moving_average_trend())
+                ])
+            ]),
+        ], width=6),
+    ], className="mb-4"),
+
+    # Box plot and city comparison
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Price Distribution by Bedrooms"),
+                dbc.CardBody([
+                    dcc.Graph(id="price-by-bedrooms", figure=create_price_by_bedrooms())
+                ])
+            ]),
+        ], width=6),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("City Price Comparison"),
+                dbc.CardBody([
+                    dcc.Graph(id="city-price-comparison", figure=create_city_price_comparison())
+                ])
+            ]),
+        ], width=6),
+    ], className="mb-4"),
+
+    # Count by City and Host
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Listings by City and Host"),
+                dbc.CardBody([
+                    dcc.Graph(id="listings-count", figure=create_listings_count())
+                ])
+            ]),
+        ]),
+    ], className="mb-4"),
+
+    # Word Cloud and Sample Table
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Word Cloud from Property Descriptions"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("City Filter for Word Cloud:"),
+                            dcc.Dropdown(
+                                id="word-cloud-city-filter",
+                                options=[{"label": city, "value": city} for city in cities],
+                                value="All Cities",
+                                clearable=False
+                            ),
+                        ], width=6),
+                        dbc.Col([
+                            dbc.Button("Generate Word Cloud", id="generate-word-cloud", color="secondary", className="mt-4"),
+                        ], width=6),
+                    ]),
+                    html.Div([
+                        html.Img(id="word-cloud-image", style={"width": "100%"})
+                    ], className="mt-3"),
+                ])
+            ]),
+        ], width=6),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Sample Listings"),
+                dbc.CardBody([
+                    html.Label("Number of samples:"),
+                    dcc.Slider(
+                        id="n-sample-slider",
+                        min=5,
+                        max=20,
+                        step=5,
+                        value=10,
+                        marks={i: str(i) for i in range(5, 21, 5)},
+                    ),
+                    dash_table.DataTable(
+                        id="sample-table",
+                        columns=[
+                            {"name": "City", "id": "city"},
+                            {"name": "Title", "id": "title"},
+                            {"name": "Bedrooms", "id": "bedrooms_count"},
+                            {"name": "Price/Night", "id": "average_rate_per_night", "type": "numeric", "format": {"specifier": "$,.2f"}},
+                        ],
+                        style_cell={
+                            'textAlign': 'left',
+                            'overflow': 'hidden',
+                            'textOverflow': 'ellipsis',
+                            'maxWidth': 0,
+                        },
+                        style_data_conditional=[
+                            {
+                                'if': {'row_index': 'odd'},
+                                'backgroundColor': 'rgb(248, 248, 248)'
+                            }
+                        ],
+                        style_header={
+                            'backgroundColor': 'rgb(230, 230, 230)',
+                            'fontWeight': 'bold'
+                        },
+                        page_size=10,
+                    ),
+                ])
+            ]),
+        ], width=6),
+    ], className="mb-4"),
+    
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Listing Keywords"),
+                dbc.CardBody([
+                    dcc.Graph(
+                        id="keyword-chart",
+                        figure=px.bar(
+                            kw_df,
+                            x="keyword",
+                            y="pct",
+                            color="pct",
+                            color_continuous_scale="Viridis",
+                            labels={"keyword": "Keyword", "pct": "Percentage of Listings (%)"},
+                            title="Percentage of Listings with Key Features",
+                        ).update_layout(template="plotly_white")
+                    )
+                ])
+            ]),
+        ]),
+    ]),
+], fluid=True)
+
+
+# Callbacks
+@callback(
     [Output('total-listings', 'children'),
      Output('total-cities', 'children'),
      Output('avg-price', 'children'),
-     Output('avg-bedrooms', 'children')],
+     Output('avg-bedrooms', 'children'),
+     Output('yearly-rate-trend', 'figure'),
+     Output('moving-average-trend', 'figure'),
+     Output('listings-count', 'figure'),
+     Output('price-by-bedrooms', 'figure'),
+     Output('city-price-comparison', 'figure'),
+     Output('keyword-chart', 'figure')],
     [Input('apply-filter', 'n_clicks')],
-    [State('city-filter', 'value')],
+    [State('city-filter', 'value'),
+     State('price-range-slider', 'value'),
+     State('bedrooms-filter', 'value')],
     prevent_initial_call=True
 )
-def update_stats(n_clicks, city_filter):
-    n_listings, n_cities, avg_price, avg_beds = get_stats(city_filter)
-    return f"{n_listings:,}", f"{n_cities}", f"${avg_price:.2f}", f"{avg_beds:.1f}"
+def update_dashboard(n_clicks, city_filter, price_range, bedrooms_filter):
+    n_listings, n_cities, avg_price, avg_beds, filtered_df = get_stats(city_filter, price_range)
+    
+    if bedrooms_filter:
+        filtered_df = filtered_df[filtered_df['bedrooms_count'].isin(bedrooms_filter)]
+    
+    # Create keyword counts for filtered data
+    kw_df_filtered = (
+        filtered_df[keywords]
+        .sum()
+        .rename("count")
+        .reset_index()
+        .rename(columns={'index': 'keyword'})
+    )
+    kw_df_filtered['pct'] = kw_df_filtered['count'] / len(filtered_df) * 100
+    
+    # Create all the updated figures
+    yearly_fig = create_yearly_rate_trend(filtered_df)
+    moving_avg_fig = create_moving_average_trend(filtered_df)
+    listings_fig = create_listings_count(filtered_df)
+    price_bedrooms_fig = create_price_by_bedrooms(filtered_df, bedrooms_filter)
+    city_price_fig = create_city_price_comparison(filtered_df)
+    
+    keyword_fig = px.bar(
+        kw_df_filtered,
+        x="keyword",
+        y="pct",
+        color="pct",
+        color_continuous_scale="Viridis",
+        labels={"keyword": "Keyword", "pct": "Percentage of Listings (%)"},
+        title="Percentage of Listings with Key Features",
+    ).update_layout(template="plotly_white")
+    
+    return (
+        f"{n_listings:,}",
+        f"{n_cities}",
+        f"${avg_price:.2f}",
+        f"{avg_beds:.1f}",
+        yearly_fig,
+        moving_avg_fig,
+        listings_fig,
+        price_bedrooms_fig,
+        city_price_fig,
+        keyword_fig
+    )
 
 
-# Callback for sample-table - update to filter by city
-@dash.callback(
+@callback(
     Output('sample-table', 'data'),
     [Input('n-sample-slider', 'value'),
      Input('apply-filter', 'n_clicks')],
-    [State('city-filter', 'value')],
+    [State('city-filter', 'value'),
+     State('price-range-slider', 'value'),
+     State('bedrooms-filter', 'value')],
 )
-def update_sample(n, n_clicks, city_filter):
-    ctx = dash.callback_context
-
-    # Get the city filter value
-    if not ctx.triggered or ctx.triggered[0]['prop_id'] == 'n-sample-slider.value':
-        if dash.callback_context.states.get('city-filter.value'):
-            city_filter = dash.callback_context.states['city-filter.value']
-        else:
-            city_filter = "All Cities"
-    if city_filter == "All Cities":
-        filtered_df = df
-    else:
-        filtered_df = df[df['city'] == city_filter]
-
-    return filtered_df.head(n).to_dict('records')
+def update_sample(n, n_clicks, city_filter, price_range, bedrooms_filter):
+    _, _, _, _, filtered_df = get_stats(city_filter, price_range)
+    
+    if bedrooms_filter:
+        filtered_df = filtered_df[filtered_df['bedrooms_count'].isin(bedrooms_filter)]
+    
+    return filtered_df.sample(min(n, len(filtered_df))).to_dict('records')
 
 
-@dash.callback(
+@callback(
     Output('word-cloud-image', 'src'),
-    [Input('generate-word-cloud', 'n_clicks')],
-    [State('word-cloud-city-filter', 'value')],
+    [Input('generate-word-cloud', 'n_clicks'),
+     Input('apply-filter', 'n_clicks')],
+    [State('word-cloud-city-filter', 'value'),
+     State('city-filter', 'value'),
+     State('price-range-slider', 'value'),
+     State('bedrooms-filter', 'value')],
     prevent_initial_call=True
 )
-def update_word_cloud(n_clicks, city_filter):
-    """Update the word cloud image based on the selected city filter"""
-    return f"data:image/png;base64,{create_word_cloud(df, city=city_filter)}"
+def update_word_cloud(wc_n_clicks, filter_n_clicks, wc_city_filter, city_filter, price_range, bedrooms_filter):
+    _, _, _, _, filtered_df = get_stats(city_filter, price_range)
+    
+    if bedrooms_filter:
+        filtered_df = filtered_df[filtered_df['bedrooms_count'].isin(bedrooms_filter)]
+        
+    return create_word_cloud(filtered_df, wc_city_filter)
