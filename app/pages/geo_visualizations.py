@@ -7,9 +7,8 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from app.utils.data_loader import load_data
-import matplotlib.pyplot as plt
 import folium
-import io
+import folium.plugins
 from math import radians, cos, sin, asin, sqrt
 
 # Register  dash page
@@ -36,6 +35,11 @@ CITY_CENTERS = {
     'Lubbock': (33.5779, -101.8552)
 }
 
+# Predefined color sequence for year-based visualizations
+YEAR_COLORS = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
+]
 
 # Function to calculate distance using Haversine formula
 def haversine(lon1, lat1, lon2, lat2):
@@ -189,74 +193,63 @@ def create_distance_price_visualization(selected_city='Houston'):
     return fig
 
 def create_folium_map_html():
-    city_avg_price = df_cleaned.groupby("city")["average_rate_per_night"].mean().reset_index()
-
-
-    m = folium.Map(
-        location=[df_cleaned["latitude"].mean(), df_cleaned["longitude"].mean()],
-        zoom_start=6,
-        tiles="OpenStreetMap"
-    )
+    city_stats = df_cleaned.groupby("city").agg({
+        "average_rate_per_night": ["mean", "std", "count"],
+        "latitude": "mean",
+        "longitude": "mean"
+    }).reset_index()
     
-    legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; width: 150px; height: 90px; 
-                background-color: white; border:2px solid grey; z-index:9999; padding: 10px;
-                font-size: 14px;">
-        <div>
-            <span style="background-color: #FFCC00; display: inline-block; width: 15px; height: 15px; 
-                  border-radius: 50%; margin-right: 5px;"></span>
-            Number of Listings
-        </div>
-        <div style="margin-top: 8px;">
-            <span style="background-color: #FF8C00; display: inline-block; width: 15px; height: 15px; 
-                  border-radius: 50%; margin-right: 5px;"></span>
-            Average Price
-        </div>
-    </div>
-    '''
-    m.get_root().html.add_child(folium.Element(legend_html))
-
-    price_values = city_avg_price["average_rate_per_night"].values
-    min_price = price_values.min()
-    max_price = price_values.max()
+    city_stats.columns = ["city", "avg_price", "price_std", "listing_count", "latitude", "longitude"]
+    price_quartiles = np.percentile(city_stats["avg_price"], [25, 50, 75])
     
     def get_price_color(price):
-        normalized = (price - min_price) / (max_price - min_price) if max_price > min_price else 0.5
-        return f'rgba({int(255)}, {int(140 + normalized * 60)}, 0, 0.8)'
+        if price <= price_quartiles[0]: return "#2ecc71"
+        elif price <= price_quartiles[1]: return "#f1c40f"
+        elif price <= price_quartiles[2]: return "#e67e22"
+        else: return "#e74c3c"
 
-    for _, row in city_avg_price.iterrows():
-        city_data = df_cleaned[df_cleaned["city"] == row["city"]]
-        lat_mean = city_data["latitude"].mean()
-        lon_mean = city_data["longitude"].mean()
-        listing_count = len(city_data)
+    m = folium.Map(location=[31.0, -100.0], zoom_start=6, tiles="CartoDB positron")
+    marker_cluster = folium.plugins.MarkerCluster(name="City Clusters", overlay=True, control=True).add_to(m)
 
-
-        if not np.isnan(lat_mean) and not np.isnan(lon_mean):
-            folium.CircleMarker(
-                location=[lat_mean, lon_mean],
-                radius=np.sqrt(listing_count) * 0.8,  
-                color="#FFCC00",
-                fill=True,
-                fill_color="#FFCC00",
-                fill_opacity=0.3,
-                popup=f"{row['city']}: {listing_count} listings",
-            ).add_to(m)
+    for _, row in city_stats.iterrows():
+        if not (np.isnan(row["latitude"]) or np.isnan(row["longitude"])):
+            popup_content = f"""
+                <div style="font-family: Arial; min-width: 180px;">
+                    <h4 style="margin-bottom: 10px;">{row['city']}</h4>
+                    <b>Average Price:</b> ${row['avg_price']:.2f}<br>
+                    <b>Price Range:</b> ${row['avg_price']-row['price_std']:.0f} - ${row['avg_price']+row['price_std']:.0f}<br>
+                    <b>Number of Listings:</b> {row['listing_count']}<br>
+                </div>
+            """
             
-            price_color = get_price_color(row["average_rate_per_night"])
             folium.CircleMarker(
-                location=[lat_mean + 0.02, lon_mean + 0.02],  
-                radius=np.sqrt(row["average_rate_per_night"]) * 0.3,
-                color="#FF8C00",
+                location=[row["latitude"], row["longitude"]],
+                radius=min(np.sqrt(row["listing_count"]) * 0.8, 20),
+                color=get_price_color(row["avg_price"]),
                 fill=True,
-                fill_color=price_color,
-                fill_opacity=0.6,
-                popup=f"{row['city']}: ${row['average_rate_per_night']:.2f} per night",
-            ).add_to(m)
-
-
-    map_html = m._repr_html_()
-
-    return map_html
+                fill_opacity=0.7,
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=f"{row['city']}: ${row['avg_price']:.0f}/night"
+            ).add_to(marker_cluster)
+    
+    legend_html = f"""
+    <div style="position: fixed; bottom: 50px; left: 50px; width: 200px; 
+                background-color: white; border:2px solid grey; z-index:9999; 
+                padding: 10px; font-size: 14px; border-radius: 6px;">
+        <h4 style="margin-top: 0;">Average Price Ranges</h4>
+        <div><span style="background-color: #2ecc71; display: inline-block; width: 15px; height: 15px; 
+                  border-radius: 50%; margin-right: 5px;"></span>Below ${price_quartiles[0]:.0f}</div>
+        <div style="margin-top: 5px;"><span style="background-color: #f1c40f; display: inline-block; width: 15px; height: 15px; 
+                  border-radius: 50%; margin-right: 5px;"></span>${price_quartiles[0]:.0f} - ${price_quartiles[1]:.0f}</div>
+        <div style="margin-top: 5px;"><span style="background-color: #e67e22; display: inline-block; width: 15px; height: 15px; 
+                  border-radius: 50%; margin-right: 5px;"></span>${price_quartiles[1]:.0f} - ${price_quartiles[2]:.0f}</div>
+        <div style="margin-top: 5px;"><span style="background-color: #e74c3c; display: inline-block; width: 15px; height: 15px; 
+                  border-radius: 50%; margin-right: 5px;"></span>Above ${price_quartiles[2]:.0f}</div>
+        <div style="margin-top: 10px; font-style: italic; font-size: 12px;">Circle size indicates number of listings</div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+    return m._repr_html_()
 
 def create_3d_sentiment_visualization():
     """Create a 3D geographic visualization of listings showing their GPS location, price as z-axis, and sentiment as color."""
@@ -355,7 +348,48 @@ def create_3d_sentiment_visualization():
     )
     return fig
 
-#  layout for geo-visualization
+def create_yearly_rate_trend():
+    avg_rate_per_year = df_cleaned.groupby('year')['average_rate_per_night'].mean().reset_index()
+    years = avg_rate_per_year['year'].tolist()
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.15,
+        subplot_titles=('Average Rate Per Night by Year (Bar)', 'Average Rate Per Night Over Time (Line)')
+    )
+
+    for i, (year, rate) in enumerate(zip(avg_rate_per_year['year'], avg_rate_per_year['average_rate_per_night'])):
+        fig.add_trace(go.Bar(
+            x=[year],
+            y=[rate],
+            marker_color=colors[i % len(colors)],
+            name=str(year),
+            showlegend=False
+        ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=avg_rate_per_year['year'],
+        y=avg_rate_per_year['average_rate_per_night'],
+        mode='lines+markers',
+        line=dict(color='red'),
+        marker=dict(size=8),
+        name='Avg Rate'
+    ), row=2, col=1)
+
+    fig.update_layout(
+        height=500,
+        template='plotly_white',
+        xaxis=dict(title='Year'),
+        xaxis2=dict(title='Year', dtick=1),
+        yaxis=dict(title='Average Rate ($)'),
+        yaxis2=dict(title='Average Rate ($)'),
+        title_text="Average Rate Per Night: Bar and Line View",
+        hovermode='x unified'
+    )
+    return fig
+
 layout = dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -435,7 +469,8 @@ layout = dbc.Container([
                             ],
                             value="price_map",
                             inline=True,
-                            className="ms-2"
+                            className="ms-2",
+                            inputStyle={"marginRight": "6px", "marginLeft": "12px"}
                         )
                     ], className="d-flex align-items-center flex-wrap")
                 ]),

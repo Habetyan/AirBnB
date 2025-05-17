@@ -6,12 +6,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from app.utils.data_loader import load_data
 from wordcloud import WordCloud
 import io
 import base64
 from dash.dependencies import Input, Output, State
+from PIL import Image as PILImage
 
 dash.register_page(__name__, path="/", name="Home")
 
@@ -58,10 +58,20 @@ def create_yearly_rate_trend():
     avg_rate_per_year = df.groupby('year')['average_rate_per_night'].mean().reset_index()
     years = avg_rate_per_year['year'].tolist()
 
-    # Generate colors
-    colors = [plt.cm.rainbow(i / len(years)) for i in range(len(years))]
-    hex_colors = ['rgba({},{},{},{})'.format(int(r * 255), int(g * 255), int(b * 255), a)
-                  for r, g, b, a in colors]
+    # forced not to use
+    predefined_colors = [
+        'rgba(31, 119, 180, 0.8)',   # blue
+        'rgba(255, 127, 14, 0.8)',   # orange
+        'rgba(44, 160, 44, 0.8)',    # green
+        'rgba(214, 39, 40, 0.8)',    # red
+        'rgba(148, 103, 189, 0.8)',  # purple
+        'rgba(140, 86, 75, 0.8)',    # brown
+        'rgba(227, 119, 194, 0.8)',  # pink
+        'rgba(127, 127, 127, 0.8)',  # gray
+        'rgba(188, 189, 34, 0.8)',   # yellow-green
+        'rgba(23, 190, 207, 0.8)'    # cyan
+    ]
+    hex_colors = [predefined_colors[i % len(predefined_colors)] for i in range(len(years))]
 
     fig = make_subplots(
         rows=2, cols=1,
@@ -265,16 +275,13 @@ def create_word_cloud(df, city=None):
     if city and city != "All Cities":
         filtered_df = filtered_df[filtered_df['city'] == city]
 
-    # Combine all descriptions
     all_descriptions = ' '.join(filtered_df['description'].fillna('').astype(str).tolist())
-
-    # Common words to exclude
+    
     stopwords = set(['the', 'and', 'to', 'of', 'in', 'a', 'is', 'with', 'for', 'on', 'at', 'from',
                      'this', 'that', 'will', 'are', 'be', 'have', 'has', 'you', 'we', 'our',
                      'your', 'their', 'us', 'can', 'just', 'or', 'by', 'not', 'an', 'it',
                      'its', 'but', 'also', 'as', 'one', 'two', 'there', 'here', 'all','my'])
 
-    # Generate word cloud - reduced size by 30%
     wordcloud = WordCloud(
         width=600,
         height=280,
@@ -285,21 +292,19 @@ def create_word_cloud(df, city=None):
         stopwords=stopwords,
         collocations=False,
         min_font_size=8,  
-        max_font_size=150 
+        max_font_size=150,
+        mode="RGBA"
     ).generate(all_descriptions)
-
-    # Convert word cloud to image
-    img = io.BytesIO()
-    plt.figure(figsize=(7.5, 3.5))  
-    plt.imshow(wordcloud, interpolation='bilinear')
-    plt.axis("off")
-    plt.tight_layout(pad=0)
-    plt.savefig(img, format='png', bbox_inches='tight', dpi=100)
-    plt.close()
-    img.seek(0)
-
-    encoded_image = base64.b64encode(img.getvalue()).decode('utf-8')
-
+    
+    # Convert to PIL image 
+    img = wordcloud.to_image()
+    
+    # Save to BytesIO 
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format='PNG')
+    img_bytes.seek(0)
+    
+    encoded_image = base64.b64encode(img_bytes.getvalue()).decode('utf-8')
     return encoded_image
 
 
@@ -326,7 +331,7 @@ def create_sentiment_analysis():
             hole=0.4,
             showlegend=True,
             textinfo='percent',
-            texttemplate='%{percent:.1f}%',
+            texttemplate='%{percent:.0f}%',
             marker=dict(colors=px.colors.sequential.Plasma[::-1]),
             title=dict(text=f"{sentiment} Price Distribution", font=dict(color=color, size=12)),
         ))
@@ -356,7 +361,7 @@ def create_sentiment_analysis():
             hole=0.4,
             showlegend=True,
             textinfo='percent',
-            texttemplate='%{percent:.1f}%',
+            texttemplate='%{percent:.0f}%',
             marker=dict(colors=px.colors.sequential.Viridis),
             title=dict(text=f"{sentiment} Bedroom Distribution", font=dict(color=color, size=12)),
         ))
@@ -793,7 +798,6 @@ def update_tone_donuts(selected_tone):
         
         return price_fig, bedroom_fig
     
-    # Calculate price distribution
     df_sentiment['price_bin'] = pd.cut(
         df_sentiment['average_rate_per_night'],
         bins=[0, 100, 200, 500, 1000, float('inf')],
@@ -801,7 +805,6 @@ def update_tone_donuts(selected_tone):
     )
     price_counts = df_sentiment['price_bin'].value_counts().sort_index()
     
-    # Create price chart 
     price_fig = go.Figure()
     if len(price_counts) > 0:
         price_fig.add_trace(go.Pie(
@@ -810,8 +813,8 @@ def update_tone_donuts(selected_tone):
             name=selected_tone,
             hole=0.4,
             showlegend=True,
-            textinfo='percent',
-            texttemplate='%{percent:.1f}%',
+            textinfo='percent+value',
+            texttemplate='%{percent:.2f}%<br>(%{value})',
             marker=dict(colors=px.colors.sequential.Plasma[::-1]),
             title=dict(text=f"{selected_tone} Price Distribution", font=dict(size=12)),
             hoverinfo='label+percent+name',
@@ -833,7 +836,6 @@ def update_tone_donuts(selected_tone):
         showlegend=False
     )
     
-    # Bedroom donut
     bedroom_bins = ['Studio', '1 BR', '2 BR', '3 BR', '4+ BR']
     df_sentiment['bedroom_bin'] = pd.cut(
         df_sentiment['bedrooms_count'],
@@ -842,7 +844,6 @@ def update_tone_donuts(selected_tone):
     )
     bedroom_counts = df_sentiment['bedroom_bin'].value_counts().sort_index()
     
-    # Create bedroom chart 
     bedroom_fig = go.Figure()
     if len(bedroom_counts) > 0:
         bedroom_fig.add_trace(go.Pie(
@@ -851,8 +852,8 @@ def update_tone_donuts(selected_tone):
             name=selected_tone,
             hole=0.4,
             showlegend=True,
-            textinfo='percent',
-            texttemplate='%{percent:.1f}%',
+            textinfo='percent+value',
+            texttemplate='%{percent:.2f}%<br>(%{value})',
             marker=dict(colors=px.colors.sequential.Viridis),
             title=dict(text=f"{selected_tone} Bedroom Distribution", font=dict(size=12)),
             hoverinfo='label+percent+name',
