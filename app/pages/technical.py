@@ -98,78 +98,93 @@ def create_feature_corr_heatmap():
 layout = dbc.Container([
     dbc.Row([
         dbc.Col([
-            html.H2("Technical Details & Data Methodology"),
+            html.H1("Technical Details & Data Methodology", className="mb-3 mt-2"),
             html.P("This page provides detailed information about the data processing and correlation analysis."),
             html.Hr(),
-
-            html.Div([
-                html.H4("Introduction"),
-                html.P([
-                    "Sharing economy and vacation rentals are among the hottest topics that has touched millions of lives across the globe. ",
-                    "Airbnb has been instrumental in this space and currently operating in more than 191 countries. ",
-                    "Hence, it'd be good idea to analyze this data and uncover insights."
-                ]),
-
-                html.H4("Dataset Overview"),
-                html.P([
-                    f"This dataset contains {df_raw.shape[0]:,} property listings from Texas, United States. ",
-                    "The data was extracted by PromptCloud's Data-as-a-Service solution and includes the following fields:"
-                ]),
-
-                html.Ul([
-                    html.Li("Rate per night"),
-                    html.Li("Number of bedrooms"),
-                    html.Li("City"),
-                    html.Li("Joining month and year"),
-                    html.Li("Longitude and Latitude"),
-                    html.Li("Property description"),
-                    html.Li("Property title"),
-                    html.Li("Property URL")
-                ]),
-
-                html.H4("Data Preparation"),
-                html.P([
-                    "The raw data required several preprocessing steps to make it suitable for analysis. ",
-                    "Below are the key data manipulations performed:"
-                ]),
-
-                html.Ul([
-                    html.Li([
-                        html.Strong("Cleaning & Type Conversion: "),
-                        "Dollar signs were removed from rates, missing values were identified, and dates were properly formatted."
-                    ]),
-                    html.Li([
-                        html.Strong("Missing Value Imputation: "),
-                        "KNN (K-Nearest Neighbors) imputation was used to fill missing values in numeric fields based on similar records."
-                    ]),
-                    html.Li([
-                        html.Strong("Text-based Feature Extraction: "),
-                        "Missing bedroom counts were inferred from property descriptions using pattern matching."
-                    ]),
-                    html.Li([
-                        html.Strong("Geospatial Clustering: "),
-                        "K-means clustering was applied to latitude/longitude to identify geographic regions."
-                    ]),
-                    html.Li([
-                        html.Strong("Feature Engineering: "),
-                        "Additional features like price_per_bedroom, listing_age, and sentiment_score were calculated."
-                    ]),
-                    html.Li([
-                        html.Strong("Sentiment Analysis: "),
-                        "TextBlob was used to analyze the sentiment of property descriptions."
-                    ]),
-                    html.Li([
-                        html.Strong("Keyword Extraction: "),
-                        "Binary flags for keywords like 'luxury', 'family', 'quiet', etc. were created from descriptions."
-                    ])
-                ]),
-            ], className="mb-4"),
         ])
     ]),
 
+    # Introduction
     dbc.Row([
         dbc.Col([
-            html.H4("Data Quality Analysis"),
+            html.H3("Introduction", className="mb-2 mt-4"),
+            html.P([
+                "Sharing economy and vacation rentals are among the hottest topics that has touched millions of lives across the globe. ",
+                "Airbnb has been instrumental in this space and currently operating in more than 191 countries. ",
+                "Hence, it'd be good idea to analyze this data and uncover insights."
+            ]),
+        ])
+    ]),
+
+    # Dataset Overview and Data Preparation side by side
+    dbc.Row([
+        # Dataset Overview column
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader(html.H3("Dataset Overview", className="mb-0")),
+                dbc.CardBody([
+                    html.P([
+                        f"This dataset contains {df_raw.shape[0]:,} property listings from Texas, United States. "
+                    ]),
+                    html.Ul([
+                        html.Li("Rate per night"),
+                        html.Li("Number of bedrooms"),
+                        html.Li("City"),
+                        html.Li("Joining month and year"),
+                        html.Li("Longitude and Latitude"),
+                        html.Li("Property description"),
+                        html.Li("Property title"),
+                        html.Li("Property URL")
+                    ]),
+                ])
+            ], className="h-100")
+        ], md=6),
+        
+        # Data Preparation column
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader(html.H3("Data Preparation", className="mb-0")),
+                dbc.CardBody([
+                    html.P([
+                        "The raw data required several preprocessing steps to make it suitable for analysis. ",
+                        "Key data manipulations performed:"
+                    ]),
+                    html.Ul([
+                        html.Li([
+                            html.Strong("Cleaning & Type Conversion: "),
+                            "Dollar signs removed, values formatted"
+                        ]),
+                        html.Li([
+                            html.Strong("Missing Value Imputation: "),
+                            "KNN imputation based on similar records"
+                        ]),
+                        html.Li([
+                            html.Strong("Text-based Feature Extraction: "),
+                            "Bedroom counts inferred from descriptions"
+                        ]),
+                        html.Li([
+                            html.Strong("Geospatial Clustering: "),
+                            "K-means used for geographic regions"
+                        ]),
+                        html.Li([
+                            html.Strong("Feature Engineering: "),
+                            "Created price_per_bedroom, listing_age, sentiment_score"
+                        ]),
+                        html.Li([
+                            html.Strong("Sentiment & Keywords: "),
+                            "TextBlob analysis and keyword flags"
+                        ])
+                    ]),
+                ])
+            ], className="h-100")
+        ], md=6),
+    ], className="mt-3 mb-3"),
+
+    html.Hr(),
+
+    dbc.Row([
+        dbc.Col([
+            html.H3("Data Quality Analysis", className="mb-2 mt-3"),
             html.P([
                 "Before diving into the analysis, it's important to understand the quality of the data. ",
                 "The visualizations below show correlations between missing values and between key features in the dataset."
@@ -179,7 +194,7 @@ layout = dbc.Container([
 
     dbc.Row([
         dbc.Col([
-            html.H5("Missing Value Correlation"),
+            html.H4("Missing Value Correlation", className="mb-2 mt-3"),
             dcc.Graph(
                 id="missing-correlation-heatmap",
                 figure=create_missing_corr_heatmap()
@@ -189,7 +204,7 @@ layout = dbc.Container([
         ], md=6),
 
         dbc.Col([
-            html.H5("Feature Correlation"),
+            html.H4("Feature Correlation", className="mb-2 mt-3"),
             dcc.Graph(
                 id="feature-correlation-heatmap",
                 figure=create_feature_corr_heatmap()
@@ -206,11 +221,11 @@ layout = dbc.Container([
         ], md=6),
     ]),
 
-    html.Br(),
+    html.Hr(),
 
     dbc.Row([
         dbc.Col([
-            html.H4("Further Analysis"),
+            html.H3("Further Analysis", className="mb-2 mt-4"),
             html.P([
                 "The insights from these correlation analyses inform the interactive visualizations available on the ",
                 html.A("Analysis", href="/analysis"),

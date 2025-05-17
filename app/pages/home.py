@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from app.utils.data_loader import load_data
 from wordcloud import WordCloud
@@ -21,11 +22,17 @@ cities = sorted(df['city'].unique())
 cities.insert(0, "All Cities")  # Add "All Cities" option at the beginning
 
 
-def get_stats(city_filter="All Cities"):
+def get_stats(city_filter="All Cities", bedroom_filter="All"):
     if city_filter == "All Cities":
         filtered_df = df
     else:
         filtered_df = df[df['city'] == city_filter]
+
+    if bedroom_filter != "All":
+        if bedroom_filter == "4+":
+            filtered_df = filtered_df[filtered_df['bedrooms_count'] >= 4]
+        else:
+            filtered_df = filtered_df[filtered_df['bedrooms_count'] == int(bedroom_filter)]
 
     n_listings = filtered_df.shape[0]
     n_cities = 1 if city_filter != "All Cities" else filtered_df['city'].nunique()
@@ -265,7 +272,7 @@ def create_word_cloud(df, city=None):
     stopwords = set(['the', 'and', 'to', 'of', 'in', 'a', 'is', 'with', 'for', 'on', 'at', 'from',
                      'this', 'that', 'will', 'are', 'be', 'have', 'has', 'you', 'we', 'our',
                      'your', 'their', 'us', 'can', 'just', 'or', 'by', 'not', 'an', 'it',
-                     'its', 'but', 'also', 'as', 'one', 'two', 'there', 'here', 'all'])
+                     'its', 'but', 'also', 'as', 'one', 'two', 'there', 'here', 'all','my'])
 
     # Generate word cloud - reduced size by 30%
     wordcloud = WordCloud(
@@ -277,13 +284,13 @@ def create_word_cloud(df, city=None):
         contour_color='steelblue',
         stopwords=stopwords,
         collocations=False,
-        min_font_size=8,  # Set minimum font size
-        max_font_size=150  # Control maximum font size
+        min_font_size=8,  
+        max_font_size=150 
     ).generate(all_descriptions)
 
     # Convert word cloud to image
     img = io.BytesIO()
-    plt.figure(figsize=(7.5, 3.5))  # Reduced from (10, 5)
+    plt.figure(figsize=(7.5, 3.5))  
     plt.imshow(wordcloud, interpolation='bilinear')
     plt.axis("off")
     plt.tight_layout(pad=0)
@@ -294,6 +301,72 @@ def create_word_cloud(df, city=None):
     encoded_image = base64.b64encode(img.getvalue()).decode('utf-8')
 
     return encoded_image
+
+
+def create_sentiment_analysis():
+    """Create sentiment analysis visualizations (donut charts, etc.), but NOT the 3D geo graph."""
+    df['sentiment_label'] = df['sentiment_label'].fillna('Neutral')
+    filtered_df = df.dropna(subset=['average_rate_per_night', 'bedrooms_count', 'sentiment_label'])
+    price_bins = ['$0-100', '$100-200', '$200-500', '$500-1000', '$1000+']
+    filtered_df['price_bin'] = pd.cut(
+        filtered_df['average_rate_per_night'],
+        bins=[0, 100, 200, 500, 1000, float('inf')],
+        labels=price_bins
+    )
+    price_fig = go.Figure()
+    for sentiment, color in zip(['Friendly', 'Neutral', 'Aggressive'], ["#2ca02c", "#d3d3d3", "#d62728"]):
+        df_sentiment = filtered_df[filtered_df['sentiment_label'] == sentiment]
+        if len(df_sentiment) == 0:
+            continue
+        price_counts = df_sentiment['price_bin'].value_counts().sort_index()
+        price_fig.add_trace(go.Pie(
+            labels=price_counts.index,
+            values=price_counts.values,
+            name=sentiment,
+            hole=0.4,
+            showlegend=True,
+            textinfo='percent',
+            texttemplate='%{percent:.1f}%',
+            marker=dict(colors=px.colors.sequential.Plasma[::-1]),
+            title=dict(text=f"{sentiment} Price Distribution", font=dict(color=color, size=12)),
+        ))
+    price_fig.update_layout(
+        title_text="Price Distribution by Sentiment",
+        height=400,
+        grid=dict(rows=1, columns=3),
+        margin=dict(t=60, b=20, l=20, r=20)
+    )
+
+    bedroom_bins = ['Studio', '1 BR', '2 BR', '3 BR', '4+ BR']
+    filtered_df['bedroom_bin'] = pd.cut(
+        filtered_df['bedrooms_count'],
+        bins=[-0.1, 0.9, 1.9, 2.9, 3.9, float('inf')],
+        labels=bedroom_bins
+    )
+    bedroom_fig = go.Figure()
+    for sentiment, color in zip(['Friendly', 'Neutral', 'Aggressive'], ["#2ca02c", "#d3d3d3", "#d62728"]):
+        df_sentiment = filtered_df[filtered_df['sentiment_label'] == sentiment]
+        if len(df_sentiment) == 0:
+            continue
+        bedroom_counts = df_sentiment['bedroom_bin'].value_counts().sort_index()
+        bedroom_fig.add_trace(go.Pie(
+            labels=bedroom_counts.index,
+            values=bedroom_counts.values,
+            name=sentiment,
+            hole=0.4,
+            showlegend=True,
+            textinfo='percent',
+            texttemplate='%{percent:.1f}%',
+            marker=dict(colors=px.colors.sequential.Viridis),
+            title=dict(text=f"{sentiment} Bedroom Distribution", font=dict(color=color, size=12)),
+        ))
+    bedroom_fig.update_layout(
+        title_text="Bedroom Distribution by Sentiment",
+        height=400,
+        grid=dict(rows=1, columns=3),
+        margin=dict(t=60, b=20, l=20, r=20)
+    )
+    return price_fig, bedroom_fig
 
 
 layout = dbc.Container(fluid=True, children=[
@@ -313,14 +386,30 @@ layout = dbc.Container(fluid=True, children=[
         dbc.Col([
             dbc.InputGroup([
                 dbc.InputGroupText("Filter by City:"),
-                dbc.Select(
+                dcc.Dropdown(
                     id="city-filter",
                     options=[{"label": city, "value": city} for city in cities],
-                    value="All Cities"
+                    value="All Cities",
+                    searchable=True,
+                    clearable=False,
+                    style={"minWidth": "200px"}
+                ),
+                dbc.InputGroupText("Filter by Bedrooms:"),
+                dbc.Select(
+                    id="bedroom-filter",
+                    options=[
+                        {"label": "All", "value": "All"},
+                        {"label": "Studio", "value": "0"},
+                        {"label": "1 Bedroom", "value": "1"},
+                        {"label": "2 Bedrooms", "value": "2"},
+                        {"label": "3 Bedrooms", "value": "3"},
+                        {"label": "4+ Bedrooms", "value": "4+"}
+                    ],
+                    value="All"
                 ),
                 dbc.Button("Apply Filter", id="apply-filter", color="primary", className="ms-2")
             ])
-        ], width={"size": 6, "offset": 0})
+        ], width={"size": 8, "offset": 0})
     ], className="mb-4"),
     dbc.Row(
         [
@@ -456,6 +545,51 @@ layout = dbc.Container(fluid=True, children=[
                     ]),
                 ]),
 
+                # Tab: Listing Description Tone Analysis
+                dbc.Tab(label="Listing Description Tone Analysis", children=[
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Card([
+                                dbc.CardHeader("Listing Description Tone Analysis"),
+                                dbc.CardBody([
+                                    html.P(
+                                        "This analysis explores how the tone of property descriptions—categorized as Positive, Neutral, or Negative—relates to property characteristics. The donut charts below show how these tone categories are distributed across different price ranges and bedroom counts, providing insight into how listing language may correlate with property features.",
+                                        className="mb-3"
+                                    ),
+                                    html.Div([
+                                        html.Label("Select Tone Category:"),
+                                        dcc.RadioItems(
+                                            id="tone-selector",
+                                            options=[
+                                                {"label": "Positive", "value": "Positive"},
+                                                {"label": "Neutral", "value": "Neutral"},
+                                                {"label": "Negative", "value": "Negative"}
+                                            ],
+                                            value="Positive",
+                                            inline=True,
+                                            className="mb-3"
+                                        )
+                                    ]),
+                                    dbc.Row([
+                                        dbc.Col([
+                                            dcc.Graph(
+                                                id="sentiment-price-donut",
+                                                responsive=True
+                                            )
+                                        ], width=6),
+                                        dbc.Col([
+                                            dcc.Graph(
+                                                id="sentiment-bedroom-donut",
+                                                responsive=True
+                                            )
+                                        ], width=6),
+                                    ])
+                                ])
+                            ], className="shadow-sm mt-3 mb-3")
+                        ]),
+                    ]),
+                ]),
+
                 # Tab 5: Sample Listings
                 dbc.Tab(label="Sample Listings", children=[
                     dbc.Row([
@@ -524,8 +658,8 @@ layout = dbc.Container(fluid=True, children=[
                                     ]),
                                 ], className="p-3")
                             ], className="shadow-sm mt-3 mb-3")
-                        ])
-                    ])
+                        ]),
+                    ]),
                 ]),
             ]),
         ], width=12),
@@ -555,22 +689,24 @@ layout = dbc.Container(fluid=True, children=[
      Output('avg-price', 'children'),
      Output('avg-bedrooms', 'children')],
     [Input('apply-filter', 'n_clicks')],
-    [State('city-filter', 'value')],
+    [State('city-filter', 'value'),
+     State('bedroom-filter', 'value')],
     prevent_initial_call=True
 )
-def update_stats(n_clicks, city_filter):
-    n_listings, n_cities, avg_price, avg_beds = get_stats(city_filter)
+def update_stats(n_clicks, city_filter, bedroom_filter):
+    n_listings, n_cities, avg_price, avg_beds = get_stats(city_filter, bedroom_filter)
     return f"{n_listings:,}", f"{n_cities}", f"${avg_price:.2f}", f"{avg_beds:.1f}"
 
 
-# Callback for sample-table - update to filter by city
+# Callback for sample-table 
 @dash.callback(
     Output('sample-table', 'data'),
     [Input('n-sample-slider', 'value'),
      Input('apply-filter', 'n_clicks')],
-    [State('city-filter', 'value')],
+    [State('city-filter', 'value'),
+     State('bedroom-filter', 'value')],
 )
-def update_sample(n, n_clicks, city_filter):
+def update_sample(n, n_clicks, city_filter, bedroom_filter):
     ctx = dash.callback_context
 
     # Get the city filter value
@@ -584,6 +720,12 @@ def update_sample(n, n_clicks, city_filter):
     else:
         filtered_df = df[df['city'] == city_filter]
 
+    if bedroom_filter != "All":
+        if bedroom_filter == "4+":
+            filtered_df = filtered_df[filtered_df['bedrooms_count'] >= 4]
+        else:
+            filtered_df = filtered_df[filtered_df['bedrooms_count'] == int(bedroom_filter)]
+
     return filtered_df.head(n).to_dict('records')
 
 
@@ -596,3 +738,140 @@ def update_sample(n, n_clicks, city_filter):
 def update_word_cloud(n_clicks, city_filter):
     """Update the word cloud image based on the selected city filter"""
     return f"data:image/png;base64,{create_word_cloud(df, city=city_filter)}"
+
+
+# Add callback to update donut charts based on selected tone
+from dash import callback_context
+
+@dash.callback(
+    [Output('sentiment-price-donut', 'figure'), Output('sentiment-bedroom-donut', 'figure')],
+    [Input('tone-selector', 'value')]
+)
+def update_tone_donuts(selected_tone):
+    df['sentiment_label'] = df['sentiment_label'].fillna('Neutral')
+    filtered_df = df.dropna(subset=['average_rate_per_night', 'bedrooms_count', 'sentiment_label'])
+    
+    # Filter data for selected tone
+    df_sentiment = filtered_df[filtered_df['sentiment_label'] == selected_tone]
+    
+    # Price donut
+    price_bins = ['$0-100', '$100-200', '$200-500', '$500-1000', '$1000+']
+    filtered_df['price_bin'] = pd.cut(
+        filtered_df['average_rate_per_night'], 
+        bins=[0, 100, 200, 500, 1000, float('inf')],
+        labels=price_bins
+    )
+    
+    if len(df_sentiment) == 0:
+        price_fig = go.Figure()
+        price_fig.add_annotation(
+            text=f"No data available for '{selected_tone}' tone category",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16)
+        )
+        price_fig.update_layout(
+            title_text="Price Distribution by Tone",
+            height=400,
+            margin=dict(t=60, b=20, l=20, r=20)
+        )
+        
+        bedroom_fig = go.Figure()
+        bedroom_fig.add_annotation(
+            text=f"No data available for '{selected_tone}' tone category",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16)
+        )
+        bedroom_fig.update_layout(
+            title_text="Bedroom Distribution by Tone",
+            height=400,
+            margin=dict(t=60, b=20, l=20, r=20)
+        )
+        
+        return price_fig, bedroom_fig
+    
+    # Calculate price distribution
+    df_sentiment['price_bin'] = pd.cut(
+        df_sentiment['average_rate_per_night'],
+        bins=[0, 100, 200, 500, 1000, float('inf')],
+        labels=price_bins
+    )
+    price_counts = df_sentiment['price_bin'].value_counts().sort_index()
+    
+    # Create price chart 
+    price_fig = go.Figure()
+    if len(price_counts) > 0:
+        price_fig.add_trace(go.Pie(
+            labels=price_counts.index,
+            values=price_counts.values,
+            name=selected_tone,
+            hole=0.4,
+            showlegend=True,
+            textinfo='percent',
+            texttemplate='%{percent:.1f}%',
+            marker=dict(colors=px.colors.sequential.Plasma[::-1]),
+            title=dict(text=f"{selected_tone} Price Distribution", font=dict(size=12)),
+            hoverinfo='label+percent+name',
+            textposition='inside'
+        ))
+    else:
+        price_fig.add_annotation(
+            text=f"No price data available for '{selected_tone}' tone category",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16)
+        )
+    
+    price_fig.update_layout(
+        title_text="Price Distribution by Tone",
+        height=400,
+        margin=dict(t=60, b=20, l=20, r=20),
+        showlegend=False
+    )
+    
+    # Bedroom donut
+    bedroom_bins = ['Studio', '1 BR', '2 BR', '3 BR', '4+ BR']
+    df_sentiment['bedroom_bin'] = pd.cut(
+        df_sentiment['bedrooms_count'],
+        bins=[-0.1, 0.9, 1.9, 2.9, 3.9, float('inf')],
+        labels=bedroom_bins
+    )
+    bedroom_counts = df_sentiment['bedroom_bin'].value_counts().sort_index()
+    
+    # Create bedroom chart 
+    bedroom_fig = go.Figure()
+    if len(bedroom_counts) > 0:
+        bedroom_fig.add_trace(go.Pie(
+            labels=bedroom_counts.index,
+            values=bedroom_counts.values,
+            name=selected_tone,
+            hole=0.4,
+            showlegend=True,
+            textinfo='percent',
+            texttemplate='%{percent:.1f}%',
+            marker=dict(colors=px.colors.sequential.Viridis),
+            title=dict(text=f"{selected_tone} Bedroom Distribution", font=dict(size=12)),
+            hoverinfo='label+percent+name',
+            textposition='inside'
+        ))
+    else:
+        bedroom_fig.add_annotation(
+            text=f"No bedroom data available for '{selected_tone}' tone category",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16)
+        )
+        
+    bedroom_fig.update_layout(
+        title_text="Bedroom Distribution by Tone",
+        height=400,
+        margin=dict(t=60, b=20, l=20, r=20),
+        showlegend=False
+    )
+    
+    return price_fig, bedroom_fig

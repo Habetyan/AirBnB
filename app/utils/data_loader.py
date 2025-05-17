@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import re
 from pathlib import Path
+import os
+import random
 
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import LabelEncoder
@@ -27,9 +29,15 @@ def load_data(return_raw=False):
     pandas.DataFrame or tuple of pandas.DataFrame
         Cleaned dataframe or (raw_df, cleaned_df) if return_raw=True
     """
-    # Check if we already have processed data
     if PARQUET_PATH.exists() and (not return_raw or PARQUET_RAW_PATH.exists()):
         df_cleaned = pd.read_parquet(PARQUET_PATH)
+        
+        # Add sentiment labels if they don't exist 
+        if 'sentiment_label' not in df_cleaned.columns:
+            df_cleaned['sentiment_label'] = df_cleaned.apply(assign_sentiment, axis=1)
+            # Cache updated data
+            df_cleaned.to_parquet(PARQUET_PATH, compression="snappy", index=False)
+        
         if return_raw:
             df_raw = pd.read_parquet(PARQUET_RAW_PATH)
             return df_raw, df_cleaned
@@ -37,11 +45,11 @@ def load_data(return_raw=False):
 
     try:
         df = pd.read_parquet(PARQUET_PATH)
-        return df
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        # Return a simple placeholder DataFrame for debugging
-        return pd.DataFrame({'Error': ['Data loading failed']})
+    except:
+        df_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Airbnb_Texas.csv')
+        df = pd.read_csv(df_path)
+    
+    df_raw = df.copy()
 
     if return_raw and not PARQUET_RAW_PATH.exists():
         df.to_parquet(PARQUET_RAW_PATH, compression="snappy", index=False)
@@ -116,6 +124,9 @@ def load_data(return_raw=False):
         .astype(str)
         .apply(lambda txt: TextBlob(txt).sentiment.polarity)
     )
+    
+    # Add sentiment label
+    df_cleaned['sentiment_label'] = df_cleaned.apply(assign_sentiment, axis=1)
 
     # Cache to Parquet and return
     df_cleaned.to_parquet(PARQUET_PATH, compression="snappy", index=False)
@@ -123,3 +134,38 @@ def load_data(return_raw=False):
     if return_raw:
         return df, df_cleaned
     return df_cleaned
+
+# Helper function for sentiment analysis
+def assign_sentiment(row):
+    """
+    Just a simple heuristic to assign sentiment label based on sentiment analysis i did in the simple notebook
+    it was done  so to keep it simple and as fast as possible, the initial sentiment analysis was about more agressive and calm desciption style """
+    if pd.isna(row['description']):
+        return 'Neutral'
+    
+    desc = str(row['description']).lower()
+    desc_len = len(desc)
+    
+    positive_words = ['luxury', 'beautiful', 'comfortable', 'perfect', 'amazing', 'great', 'excellent']
+    negative_words = ['problem', 'issue', 'complaint', 'bad', 'difficult', 'poor']
+    
+    has_positive = any(word in desc for word in positive_words)
+    has_negative = any(word in desc for word in negative_words)
+    
+    if has_positive and not has_negative:
+        return 'Positive'
+    elif has_negative and not has_positive:
+        return 'Negative'
+    
+    if desc_len > 500:
+        return 'Positive'  
+    elif desc_len < 100:
+        return 'Neutral' 
+    else:
+        r = random.random()
+        if r < 0.7:
+            return 'Positive'
+        elif r < 0.9:
+            return 'Neutral'
+        else:
+            return 'Negative'

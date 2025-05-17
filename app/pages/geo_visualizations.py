@@ -59,7 +59,6 @@ def haversine(lon1, lat1, lon2, lat2):
 def create_geo_visualization():
     df_geo = df_cleaned.dropna(subset=["latitude", "longitude"])
 
-
     fig = make_subplots(
         rows=1, cols=2,
         subplot_titles=[
@@ -109,7 +108,9 @@ def create_geo_visualization():
         template='plotly_white',
         height=600,
         title_text='Airbnb Listings Density in Texas',
-        showlegend=False
+        showlegend=False,
+        autosize=True,  
+        margin=dict(l=20, r=20, t=50, b=20)  
     )
 
     # Axis titles
@@ -160,7 +161,9 @@ def create_distance_price_visualization(selected_city='Houston'):
         height=500,
         template='plotly_white',
         xaxis_title='Distance from City Center (km)',
-        yaxis_title='Average Rate per Night ($)'
+        yaxis_title='Average Rate per Night ($)',
+        autosize=True,  # Make plot automatically resize
+        margin=dict(l=20, r=20, t=50, b=20)  # Smaller margins 
     )
 
     #  trendline
@@ -194,23 +197,60 @@ def create_folium_map_html():
         zoom_start=6,
         tiles="OpenStreetMap"
     )
+    
+    legend_html = '''
+    <div style="position: fixed; bottom: 50px; left: 50px; width: 150px; height: 90px; 
+                background-color: white; border:2px solid grey; z-index:9999; padding: 10px;
+                font-size: 14px;">
+        <div>
+            <span style="background-color: #FFCC00; display: inline-block; width: 15px; height: 15px; 
+                  border-radius: 50%; margin-right: 5px;"></span>
+            Number of Listings
+        </div>
+        <div style="margin-top: 8px;">
+            <span style="background-color: #FF8C00; display: inline-block; width: 15px; height: 15px; 
+                  border-radius: 50%; margin-right: 5px;"></span>
+            Average Price
+        </div>
+    </div>
+    '''
+    m.get_root().html.add_child(folium.Element(legend_html))
 
-    # Circle markers for each city
+    price_values = city_avg_price["average_rate_per_night"].values
+    min_price = price_values.min()
+    max_price = price_values.max()
+    
+    def get_price_color(price):
+        normalized = (price - min_price) / (max_price - min_price) if max_price > min_price else 0.5
+        return f'rgba({int(255)}, {int(140 + normalized * 60)}, 0, 0.8)'
+
     for _, row in city_avg_price.iterrows():
         city_data = df_cleaned[df_cleaned["city"] == row["city"]]
         lat_mean = city_data["latitude"].mean()
         lon_mean = city_data["longitude"].mean()
+        listing_count = len(city_data)
 
-        # Sanity check for correct coordinates
+
         if not np.isnan(lat_mean) and not np.isnan(lon_mean):
             folium.CircleMarker(
                 location=[lat_mean, lon_mean],
-                radius=np.sqrt(row["average_rate_per_night"]) * 0.3,
-                color="green",
+                radius=np.sqrt(listing_count) * 0.8,  
+                color="#FFCC00",
                 fill=True,
-                fill_color="green",
+                fill_color="#FFCC00",
                 fill_opacity=0.3,
-                popup=f"{row['city']}: ${row['average_rate_per_night']:.2f}",
+                popup=f"{row['city']}: {listing_count} listings",
+            ).add_to(m)
+            
+            price_color = get_price_color(row["average_rate_per_night"])
+            folium.CircleMarker(
+                location=[lat_mean + 0.02, lon_mean + 0.02],  
+                radius=np.sqrt(row["average_rate_per_night"]) * 0.3,
+                color="#FF8C00",
+                fill=True,
+                fill_color=price_color,
+                fill_opacity=0.6,
+                popup=f"{row['city']}: ${row['average_rate_per_night']:.2f} per night",
             ).add_to(m)
 
 
@@ -218,122 +258,194 @@ def create_folium_map_html():
 
     return map_html
 
+def create_3d_sentiment_visualization():
+    """Create a 3D geographic visualization of listings showing their GPS location, price as z-axis, and sentiment as color."""
+    df_cleaned['sentiment_label'] = df_cleaned['sentiment_label'].fillna('Neutral')
+    filtered_df = df_cleaned.dropna(subset=['latitude', 'longitude', 'average_rate_per_night'])
+    filtered_df = filtered_df[(filtered_df['latitude'] > 25) & (filtered_df['latitude'] < 35) & 
+                             (filtered_df['longitude'] > -110) & (filtered_df['longitude'] < -90)]
+    if len(filtered_df) > 3000:
+        filtered_df = filtered_df.sample(3000, random_state=42)
+    
+    colors = {'Positive': '#2ca02c', 'Neutral': '#d3d3d3', 'Negative': '#d62728'}
+    
+    fig = go.Figure()
+    for sentiment in ['Positive', 'Neutral', 'Negative']:
+        df_sentiment = filtered_df[filtered_df['sentiment_label'] == sentiment]
+        if len(df_sentiment) == 0:
+            continue
+        
+        fig.add_trace(
+            go.Scatter3d(
+                x=df_sentiment['longitude'],
+                y=df_sentiment['latitude'],
+                z=df_sentiment['average_rate_per_night'],
+                mode='markers',
+                marker=dict(
+                    size=5,
+                    color=colors[sentiment],
+                    opacity=0.7,
+                    line=dict(width=0.5, color='white')
+                ),
+                text=df_sentiment['title'],
+                customdata=np.stack((
+                    df_sentiment['city'], 
+                    df_sentiment['bedrooms_count'],
+                    df_sentiment['sentiment_label']
+                ), axis=-1),
+                hovertemplate=(
+                    "<b>%{text}</b><br>" +
+                    "City: %{customdata[0]}<br>" +
+                    "Price: $%{z:.2f}<br>" +
+                    "Bedrooms: %{customdata[1]}<br>" +
+                    "Sentiment: %{customdata[2]}<br>" +
+                    "Lat: %{y:.4f}, Long: %{x:.4f}<extra></extra>"
+                ),
+                name=sentiment
+            )
+        )
+    fig.update_layout(
+        height=750,
+        template="plotly_white",
+        title={
+            'text': "3D Geographic Sentiment Analysis: Property Locations, Prices, and Sentiment",
+            'x': 0.5,
+            'y': 0.98,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': {'size': 20}
+        },
+        margin=dict(t=120, b=20, l=40, r=40),
+        scene=dict(
+            xaxis=dict(
+                title="Longitude",
+                range=[-106, -94],
+                backgroundcolor='rgba(230, 230, 230, 0.8)',
+                gridcolor='white',
+                showbackground=True
+            ),
+            yaxis=dict(
+                title="Latitude",
+                range=[26, 34],
+                backgroundcolor='rgba(230, 230, 230, 0.8)',
+                gridcolor='white',
+                showbackground=True
+            ),
+            zaxis=dict(
+                title="Price ($)",
+                backgroundcolor='rgba(230, 230, 230, 0.8)',
+                gridcolor='white',
+                showbackground=True
+            ),
+            aspectmode='manual',
+            aspectratio=dict(x=1.5, y=1, z=0.8),
+            camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.2),
+                center=dict(x=0, y=0, z=-0.1)
+            )
+        ),
+        legend=dict(
+            title="Sentiment Categories",
+            orientation="h",
+            y=1.0,
+            yanchor="bottom",
+            x=0.5,
+            xanchor="center"
+        )
+    )
+    return fig
 
 #  layout for geo-visualization
 layout = dbc.Container([
     dbc.Row([
         dbc.Col([
-            html.H1("Geographic Analysis of Texas Airbnb Listings"),
-            html.P("Visualizing the spatial distribution and price patterns of Airbnb properties across Texas"),
+            html.H1("Geographic Analysis of Texas Airbnb Listings", className="text-center text-md-start"),
+            html.P("Visualizing the spatial distribution and price patterns of Airbnb properties across Texas", 
+                   className="text-center text-md-start"),
             html.Hr(),
         ])
     ]),
 
-    #  Density visualizations
+    # Section: Listing Density
     dbc.Row([
         dbc.Col([
+            html.H3("Listing Density Across Texas", className="mb-2 mt-4"),
             dbc.Card([
                 dbc.CardHeader("Listing Density Analysis"),
                 dbc.CardBody([
                     dcc.Graph(
                         id="geo-visualization",
-                        figure=create_geo_visualization()
+                        figure=create_geo_visualization(),
+                        responsive=True,
+                        style={"height": "60vh", "min-height": "300px"}
                     )
                 ])
             ])
-        ])
+        ], xs=12)
     ]),
 
-    html.Br(),
+    html.Hr(),
 
-    #  Distance/price plot
+    # Section: Price vs Distance
     dbc.Row([
         dbc.Col([
+            html.H3("Price vs. Distance from City Center", className="mb-2 mt-4"),
+            html.P("Explore how property prices vary with distance from major city centers in Texas."),
             dbc.Card([
-                dbc.CardHeader("Distance from City Center vs. Price"),
+                dbc.CardHeader([
+                    html.Div([
+                        html.Span("Select City Center: ", className="me-2"),
+                        dcc.Dropdown(
+                            id="city-center-dropdown",
+                            options=[{"label": city, "value": city} for city in CITY_CENTERS.keys()],
+                            value="Houston",
+                            clearable=False,
+                            style={"display": "inline-block", "min-width": "150px", "max-width": "250px"}
+                        )
+                    ], className="d-flex align-items-center flex-wrap")
+                ]),
                 dbc.CardBody([
-                    html.P(
-                        "This visualization shows how property prices vary with distance from major city centers in Texas."),
-                    dbc.Row([
-                        dbc.Col([
-                            html.Label("Select City Center:"),
-                            dcc.Dropdown(
-                                id="city-center-dropdown",
-                                options=[{"label": city, "value": city} for city in CITY_CENTERS.keys()],
-                                value="Houston",
-                                className="mb-3"
-                            ),
-                        ], width=4)
-                    ]),
                     dcc.Graph(
                         id="distance-price-visualization",
-                        figure=create_distance_price_visualization()
+                        figure=create_distance_price_visualization(),
+                        responsive=True,
+                        style={"height": "50vh", "min-height": "300px"}
                     )
                 ])
             ])
-        ])
+        ], xs=12)
     ]),
 
-    html.Br(),
+    html.Hr(),
 
-    # Folium map
+    # Section: Map Visualization Toggle
     dbc.Row([
         dbc.Col([
+            html.H3("Interactive Map Visualizations", className="mb-2 mt-4"),
+            html.P("Choose between different map visualizations to explore the data."),
             dbc.Card([
-                dbc.CardHeader("Average Price by City"),
-                dbc.CardBody([
-                    html.P(
-                        "This map shows the average price per night for each city in Texas. The size of each circle represents the price."),
+                dbc.CardHeader([
                     html.Div([
-                        html.Iframe(
-                            id="folium-map",
-                            srcDoc=create_folium_map_html(),
-                            style={
-                                "width": "100%",
-                                "height": "600px",
-                                "border": "none"
-                            }
+                        html.Span("Select Visualization: ", className="me-2"),
+                        dcc.RadioItems(
+                            id="map-visualization-toggle",
+                            options=[
+                                {"label": "Average Price Map by City", "value": "price_map"},
+                                {"label": "3D Geographic Tone Analysis", "value": "sentiment_3d"}
+                            ],
+                            value="price_map",
+                            inline=True,
+                            className="ms-2"
                         )
-                    ])
+                    ], className="d-flex align-items-center flex-wrap")
+                ]),
+                dbc.CardBody([
+                    html.Div(id="map-visualization-container")
                 ])
             ])
-        ])
-    ]),
-
-    html.Br(),
-
-    dbc.Row([
-        dbc.Col([
-            html.H4("Understanding the Visualizations"),
-            html.P([
-                "This page presents geographic visualizations of Texas Airbnb listings:",
-                html.Ul([
-                    html.Li([
-                        html.Strong("KDE-like Density:"),
-                        " Shows where listings are concentrated using contour lines and scatter points"
-                    ]),
-                    html.Li([
-                        html.Strong("Density Heatmap:"),
-                        " Displays listing density as a 2D histogram with color intensity"
-                    ]),
-                    html.Li([
-                        html.Strong("Distance vs. Price Analysis:"),
-                        " Reveals how property prices vary with distance from major city centers"
-                    ]),
-                    html.Li([
-                        html.Strong("Average Price Map:"),
-                        " Shows average price per night for each city, with circle size representing price"
-                    ])
-                ])
-            ]),
-            html.P([
-                "For more information about data processing and methodology, visit the ",
-                html.A("Technical Details", href="/technical"), " page."
-            ]),
-            html.Br(),
-        ])
+        ], xs=12)
     ])
-], fluid=True)
+], fluid=True, className="pb-4")
 
 
 # Callback to update Distance vs. Price visualization based on selected city
@@ -343,3 +455,23 @@ layout = dbc.Container([
 )
 def update_distance_price(selected_city):
     return create_distance_price_visualization(selected_city)
+
+# Callback to update the map visualization based on the selected option
+@dash.callback(
+    Output("map-visualization-container", "children"),
+    Input("map-visualization-toggle", "value")
+)
+def update_map_visualization(selected_visualization):
+    if selected_visualization == "price_map":
+        return html.Iframe(
+            id="folium-map",
+            srcDoc=create_folium_map_html(),
+            style={"width": "100%", "height": "50vh", "min-height": "300px", "border": "none"}
+        )
+    else:  # sentiment_3d
+        return dcc.Graph(
+            id="sentiment-3d-viz",
+            figure=create_3d_sentiment_visualization(),
+            responsive=True,
+            style={"height": "70vh", "min-height": "400px"}
+        )
